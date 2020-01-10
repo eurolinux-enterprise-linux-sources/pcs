@@ -1,0 +1,35 @@
+From a63aeccbcb17a8d2d057019e342a15f30d14c3f9 Mon Sep 17 00:00:00 2001
+From: Tomas Jelinek <tojeline@redhat.com>
+Date: Fri, 3 Apr 2015 09:58:49 +0200
+Subject: [PATCH] Fix passing parameters to python-clufter
+
+---
+ pcs/config.py | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/pcs/config.py b/pcs/config.py
+index 136362b..e83d537 100644
+--- a/pcs/config.py
++++ b/pcs/config.py
+@@ -461,6 +461,7 @@ def config_import_cman(argv):
+         "cib": {"passin": "bytestring"},
+         "nocheck": force,
+         "batch": True,
++        "sys": "linux",
+     }
+     if interactive:
+         if "EDITOR" not in os.environ:
+@@ -471,8 +472,10 @@ def config_import_cman(argv):
+         logging.getLogger("clufter").setLevel(logging.DEBUG)
+     if rhel6:
+         clufter_args["ccs_pcmk"] = {"passin": "bytestring"}
++        clufter_args["dist"] = "redhat,6.7,Santiago"
+     else:
+         clufter_args["coro"] = {"passin": "struct"}
++        clufter_args["dist"] = "redhat,7.1,Maipo"
+     clufter_args_obj = type('ClufterOptions', (object, ), clufter_args)
+ 
+     # run convertor
+-- 
+1.9.1
+

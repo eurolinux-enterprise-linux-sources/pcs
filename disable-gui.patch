@@ -1,0 +1,10 @@
+--- pcs-0.9.122/pcsd/pcsd.rb.disable_gui	2014-06-13 16:57:42.240256197 -0500
++++ pcs-0.9.122/pcsd/pcsd.rb	2014-06-13 17:03:42.171323230 -0500
+@@ -65,6 +65,6 @@ configure do
+   ISRHEL6 = is_rhel6
+   ISSYSTEMCTL = is_systemctl
+-  DISABLE_GUI = false
++  DISABLE_GUI = true
+ 
+   OCF_ROOT = "/usr/lib/ocf"
+   HEARTBEAT_AGENTS_DIR = "/usr/lib/ocf/resource.d/heartbeat/"
