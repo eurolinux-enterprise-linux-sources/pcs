@@ -1,6 +1,6 @@
 Name: pcs
 Version: 0.9.155
-Release: 2%{?dist}
+Release: 3%{?dist}
 License: GPLv2
 URL: https://github.com/ClusterLabs/pcs
 Group: System Environment/Base
@@ -23,6 +23,7 @@ Patch6: disable-gui.patch
 Patch7: ommit-rb-asserts-resulting-inconsistent-on-rhel6.patch
 Patch8: disable-booth-and-qdevice.patch
 Patch9: show-only-warning-when-crm_mon-xml-is-invalid.patch
+Patch10: bz1557962-01-get-rid-of-debug-when-calling-local-pcsd.patch
 
 Source11: https://rubygems.org/downloads/backports-3.6.8.gem
 Source12: https://rubygems.org/downloads/json-1.8.3.gem
@@ -142,6 +143,8 @@ UpdateTimestamps -p1 %{PATCH7}
 UpdateTimestamps -p1 %{PATCH8}
 %patch9 -p1
 UpdateTimestamps -p1 %{PATCH9}
+%patch10 -p1
+UpdateTimestamps -p1 %{PATCH10}
 
 mkdir -p pcsd/.bundle
 cp -f %SOURCE1 pcsd/.bundle/config
@@ -319,6 +322,10 @@ fi
 %doc COPYING README
 
 %changelog
+* Wed Mar 21 2018 Ondrej Mular <omular@redhat.com> - 0.9.155-3
+- Fixed CVE-2018-1086 pcs: Debug parameter removal bypass, allowing information disclosure
+- Resolves: rhbz#1557962
+
 * Wed Nov 23 2016 Ivan Devat <idevat@redhat.com> - 0.9.155-2
 - Fixed upgrading CIB to the latest schema version
 - Adding a node in a cluster does not cause the new node to be fenced immediately
