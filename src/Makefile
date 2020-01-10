@@ -1,23 +1,26 @@
 # Compatibility with GNU/Linux [i.e. Debian] based distros
 UNAME_OS_GNU := $(shell if uname -o | grep -q "GNU/Linux" ; then echo true; else echo false; fi)
-UNAME_KERNEL_DEBIAN := $(shell if uname -v | grep -q "Debian\|Ubuntu" ; then echo true; else echo false; fi)
+DISTRO_DEBIAN := $(shell if [ -e /etc/debian_version ] ; then echo true; else echo false; fi)
 IS_DEBIAN=false
-UNAME_DEBIAN_VER_8=false
+DISTRO_DEBIAN_VER_8=false
+
+ifndef PYTHON
+	PYTHON=python
+endif
 
 ifeq ($(UNAME_OS_GNU),true)
-  ifeq ($(UNAME_KERNEL_DEBIAN),true)
+  ifeq ($(DISTRO_DEBIAN),true)
     IS_DEBIAN=true
-    UNAME_DEBIAN_VER_8 := $(shell if grep -q -i "8" /etc/debian_version ; then echo true; else echo false; fi)
-    settings_x86_64 := $(shell if uname -m | grep -q -i "x86_64" ; then echo true; else echo false; fi)
-    settings_i386=false
-    ifeq ($(settings_x86_64),false)
-      settings_i386 := $(shell if uname -m | grep -q -i "i386" ; then echo true; else echo false; fi)
-    endif
+    DISTRO_DEBIAN_VER_8 := $(shell if grep -q -i "^8\|jessie" /etc/debian_version ; then echo true; else echo false; fi)
+    # dpkg-architecture is in the optional dpkg-dev package, unfortunately.
+    #DEB_HOST_MULTIARCH := $(shell dpkg-architecture -qDEB_HOST_MULTIARCH)
+    # TODO: Use lsb_architecture to get the multiarch tuple if/when it becomes available in distributions.
+    DEB_HOST_MULTIARCH := $(shell dpkg -L libc6 | sed -nr 's|^/etc/ld\.so\.conf\.d/(.*)\.conf$$|\1|p')
   endif
 endif
 
 ifndef PYTHON_SITELIB
-  PYTHON_SITELIB=$(shell python -c "from distutils.sysconfig import get_python_lib; print(get_python_lib())")
+  PYTHON_SITELIB=$(shell $(PYTHON) -c "from distutils.sysconfig import get_python_lib; print(get_python_lib())")
 endif
 ifeq ($(PYTHON_SITELIB), /usr/lib/python2.6/dist-packages)
   EXTRA_SETUP_OPTS="--install-layout=deb"
@@ -54,7 +57,7 @@ endif
 MANDIR=/usr/share/man
 
 ifndef PREFIX
-  PREFIX=$(shell prefix=`python -c "import sys; print(sys.prefix)"` || prefix="/usr"; echo $$prefix)
+  PREFIX=$(shell prefix=`$(PYTHON) -c "import sys; print(sys.prefix)"` || prefix="/usr"; echo $$prefix)
 endif
 
 ifndef systemddir
@@ -66,35 +69,34 @@ ifndef initdir
 endif
 
 ifndef install_settings
-  install_settings=false
-else
-  ifeq ($(install_settings),true)
-    ifeq ($(settings_x86_64),true)
-      settings_file=settings.py.x86_64-linux-gnu.debian
-      settings_file_pcsd=settings.rb.x86_64-linux-gnu.debian
-    else
-      ifeq ($(settings_i386),true)
-        settings_file=settings.py.i386-linux-gnu.debian
-        settings_file_pcsd=settings.rb.i386-linux-gnu.debian
-      endif
-    endif
+  ifeq ($(IS_DEBIAN),true)
+    install_settings=true
+  else
+    install_settings=false
   endif
 endif
 
-install: bash_completion
-	python setup.py install --prefix ${DESTDIR}${PREFIX} ${EXTRA_SETUP_OPTS}
+
+ifndef BASH_COMPLETION_DIR
+	BASH_COMPLETION_DIR=${DESTDIR}/etc/bash_completion.d
+endif
+
+install:
+	$(PYTHON) setup.py install --root=$(or ${DESTDIR}, /) ${EXTRA_SETUP_OPTS}
 	mkdir -p ${DESTDIR}${PREFIX}/sbin/
-	chmod 755 ${DESTDIR}${PYTHON_SITELIB}/pcs/pcs.py
-	ln -fs ${PYTHON_SITELIB}/pcs/pcs.py ${DESTDIR}${PREFIX}/sbin/pcs
-	install -D pcs/bash_completion.d.pcs ${DESTDIR}/etc/bash_completion.d/pcs
+	mv ${DESTDIR}${PREFIX}/bin/pcs ${DESTDIR}${PREFIX}/sbin/pcs
+	install -D -m644 pcs/bash_completion.sh ${BASH_COMPLETION_DIR}/pcs
 	install -m644 -D pcs/pcs.8 ${DESTDIR}/${MANDIR}/man8/pcs.8
 ifeq ($(IS_DEBIAN),true)
   ifeq ($(install_settings),true)
 	rm -f  ${DESTDIR}${PYTHON_SITELIB}/pcs/settings.py
-	install -m755 pcs/${settings_file} ${DESTDIR}${PYTHON_SITELIB}/pcs/settings.py
+	tmp_settings=`mktemp`; \
+	        sed s/DEB_HOST_MULTIARCH/${DEB_HOST_MULTIARCH}/g pcs/settings.py.debian > $$tmp_settings; \
+	        install -m644 $$tmp_settings ${DESTDIR}${PYTHON_SITELIB}/pcs/settings.py; \
+	        rm -f $$tmp_settings
+	$(PYTHON) -m compileall -fl ${DESTDIR}${PYTHON_SITELIB}/pcs/settings.py
   endif
 endif
-	
 
 install_pcsd:
 ifeq ($(BUILD_GEMS),true)
@@ -109,7 +111,10 @@ ifeq ($(IS_DEBIAN),true)
 	install  pcsd/pcsd.pam.debian ${DESTDIR}/etc/pam.d/pcsd
   ifeq ($(install_settings),true)
 	rm -f  ${DESTDIR}/usr/share/pcsd/settings.rb
-	install -m755 pcsd/${settings_file_pcsd} ${DESTDIR}/usr/share/pcsd/settings.rb
+	tmp_settings_pcsd=`mktemp`; \
+	        sed s/DEB_HOST_MULTIARCH/${DEB_HOST_MULTIARCH}/g pcsd/settings.rb.debian > $$tmp_settings_pcsd; \
+	        install -m644 $$tmp_settings_pcsd ${DESTDIR}/usr/share/pcsd/settings.rb; \
+	        rm -f $$tmp_settings_pcsd
   endif
   ifeq ($(IS_SYSTEMCTL),true)
 	install -d ${DESTDIR}/${systemddir}/system/
@@ -126,6 +131,9 @@ else
   ifeq ($(IS_SYSTEMCTL),true)
 	install -d ${DESTDIR}/${systemddir}/system/
 	install -m 644 pcsd/pcsd.service ${DESTDIR}/${systemddir}/system/
+# ${DESTDIR}${PREFIX}/lib/pcsd/pcsd holds the selinux context
+	install -m 755 pcsd/pcsd.service-runner ${DESTDIR}${PREFIX}/lib/pcsd/pcsd
+	rm ${DESTDIR}${PREFIX}/lib/pcsd/pcsd.service-runner
   else
 	install -m 755 -D pcsd/pcsd ${DESTDIR}/${initdir}/pcsd
   endif
@@ -149,12 +157,9 @@ endif
 	rm -f ${DESTDIR}/etc/pam.d/pcsd
 	rm -rf ${DESTDIR}/var/lib/pcsd
 
-tarball: bash_completion
-	python setup.py sdist --formats=tar
-	python maketarballs.py
+tarball:
+	$(PYTHON) setup.py sdist --formats=tar
+	$(PYTHON) maketarballs.py
 
 newversion:
-	python newversion.py
-
-bash_completion:
-	cd pcs ; python -c 'import usage;  usage.sub_generate_bash_completion()' > bash_completion.d.pcs ; cd ..
+	$(PYTHON) newversion.py

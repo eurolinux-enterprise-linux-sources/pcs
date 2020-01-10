@@ -16,13 +16,55 @@ class PCSConfig
 
     input_clusters = []
     input_permissions = {}
+    default_permissions = [
+      {
+        'type' => Permissions::TYPE_GROUP,
+        'name' => ADMIN_GROUP,
+        'allow' => [
+          Permissions::READ,
+          Permissions::WRITE,
+          Permissions::GRANT,
+        ]
+      },
+    ]
 
+    # set a reasonable default if file doesn't exist
+    # set default permissions for backwards compatibility (there is no way to
+    # differentiante between an old cluster without config and a new cluster
+    # without config)
+    # Since ADMIN_GROUP has access to pacemaker by default anyway, we can safely
+    # allow access in pcsd as well even for new clusters.
+    if cfg_text.nil?
+      @format_version = CURRENT_FORMAT
+      perm_list = []
+      default_permissions.each { |perm|
+        perm_list << Permissions::EntityPermissions.new(
+          perm['type'], perm['name'], perm['allow']
+        )
+      }
+      @permissions_local = Permissions::PermissionsSet.new(perm_list)
+      return
+    end
+
+    # set a reasonable default if got empty text (i.e. file exists but is empty)
+    if cfg_text.strip.empty?
+      @format_version = CURRENT_FORMAT
+      return
+    end
+
+    # main parsing
     begin
       json = JSON.parse(cfg_text)
-      if not(json.is_a?(Hash) and json.key?("format_version"))
+      if json.is_a?(Array)
         @format_version = 1
-      else
+      elsif (
+        json.is_a?(Hash) and
+        json.key?('format_version') and
+        json['format_version'].is_a?(Integer)
+      )
         @format_version = json["format_version"]
+      else
+        raise 'invalid file format'
       end
 
       if @format_version > CURRENT_FORMAT
@@ -43,19 +85,7 @@ class PCSConfig
         # All members of 'haclient' group had unrestricted access.
         # We give them access to most functions except reading tokens and keys,
         # they also won't be able to add and remove nodes because of that.
-        input_permissions = {
-          'local_cluster' => [
-            {
-              'type' => Permissions::TYPE_GROUP,
-              'name' => ADMIN_GROUP,
-              'allow' => [
-                Permissions::READ,
-                Permissions::WRITE,
-                Permissions::GRANT,
-              ]
-            },
-          ],
-        }
+        input_permissions = {'local_cluster' => default_permissions}
         # backward compatibility code end
       else
         $logger.error("Unable to parse pcs_settings file")
@@ -160,6 +190,12 @@ class PCSTokens
     @format_version = 0
     @data_version = 0
     @tokens = {}
+
+    # set a reasonable parseable default if got empty text
+    if cfg_text.nil? or cfg_text.strip.empty?
+      @format_version = CURRENT_FORMAT
+      return
+    end
 
     begin
       json = JSON.parse(cfg_text)

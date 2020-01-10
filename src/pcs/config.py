@@ -1,7 +1,9 @@
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-from __future__ import unicode_literals
+from __future__ import (
+    absolute_import,
+    division,
+    print_function,
+    unicode_literals,
+)
 
 import sys
 import os
@@ -16,9 +18,10 @@ import logging
 import pwd
 import grp
 import time
+import platform
 
-logging.basicConfig() # clufter needs logging set before imported
 try:
+    import clufter.facts
     import clufter.format_manager
     import clufter.filter_manager
     import clufter.command_manager
@@ -26,15 +29,25 @@ try:
 except ImportError:
     no_clufter = True
 
-import settings
-import utils
-import cluster
-import constraint
-import prop
-import resource
-import status
-import stonith
-import usage
+from pcs import (
+    cluster,
+    constraint,
+    prop,
+    quorum,
+    resource,
+    settings,
+    status,
+    stonith,
+    usage,
+    utils,
+    alert,
+)
+from pcs.lib.errors import LibraryError
+from pcs.lib.commands import quorum as lib_quorum
+import pcs.cli.constraint_colocation.command as colocation_command
+import pcs.cli.constraint_order.command as order_command
+import pcs.cli.constraint_ticket.command as ticket_command
+from pcs.cli.common.console_report import indent
 
 
 def config_cmd(argv):
@@ -83,7 +96,30 @@ def config_show(argv):
     status.nodes_status(["config"])
     print()
     config_show_cib()
-    cluster.cluster_uidgid([], True)
+    if (
+        utils.hasCorosyncConf()
+        and
+        (
+            utils.is_rhel6()
+            or
+            (not utils.usefile and "--corosync_conf" not in utils.pcs_options)
+        )
+    ):
+        # with corosync 1 and cman, uid gid is part of cluster.conf file
+        # with corosync 2, uid gid is in a separate directory
+        cluster.cluster_uidgid([], True)
+    if (
+        "--corosync_conf" in utils.pcs_options
+        or
+        (not utils.is_rhel6() and utils.hasCorosyncConf())
+    ):
+        print()
+        print("Quorum:")
+        try:
+            config = lib_quorum.get_config(utils.get_lib_env())
+            print("\n".join(indent(quorum.quorum_config_to_str(config))))
+        except LibraryError as e:
+            utils.process_library_reports(e.args)
 
 def config_show_cib():
     print("Resources:")
@@ -94,11 +130,19 @@ def config_show_cib():
     print("Stonith Devices:")
     resource.resource_show([], True)
     print("Fencing Levels:")
-    print()
     stonith.stonith_level_show()
+    print()
+
+    lib = utils.get_library_wrapper()
     constraint.location_show([])
-    constraint.order_show([])
-    constraint.colocation_show([])
+    modificators = utils.get_modificators()
+    order_command.show(lib, [], modificators)
+    colocation_command.show(lib, [], modificators)
+    ticket_command.show(lib, [], modificators)
+
+    print()
+    alert.print_alert_config(lib, [], modificators)
+
     print()
     del utils.pcs_options["--all"]
     print("Resources Defaults:")
@@ -233,14 +277,23 @@ def config_restore_remote(infile_name, infile_obj):
                 err_msgs.append(output)
                 continue
             status = json.loads(output)
-            if status["corosync"] or status["pacemaker"] or status["cman"]:
+            if (
+                status["corosync"]
+                or
+                status["pacemaker"]
+                or
+                status["cman"]
+                or
+                # not supported by older pcsd, do not fail if not present
+                status.get("pacemaker_remote", False)
+            ):
                 err_msgs.append(
                     "Cluster is currently running on node %s. You need to stop "
                         "the cluster in order to restore the configuration."
                     % node
                 )
                 continue
-        except (ValueError, NameError):
+        except (ValueError, NameError, LookupError):
             err_msgs.append("unable to determine status of the node %s" % node)
     if err_msgs:
         for msg in err_msgs:
@@ -252,7 +305,7 @@ def config_restore_remote(infile_name, infile_obj):
     # If node returns HTTP 404 it does not support config syncing at all.
     for node in node_list:
         retval, output = utils.pauseConfigSyncing(node, 10 * 60)
-        if not (retval == 0 or output.endswith("(HTTP error: 404)")):
+        if not (retval == 0 or "(HTTP error: 404)" in output):
             utils.err(output)
 
     if infile_obj:
@@ -272,11 +325,13 @@ def config_restore_remote(infile_name, infile_obj):
 
 def config_restore_local(infile_name, infile_obj):
     if (
-        status.is_cman_running()
+        status.is_service_running("cman")
         or
-        status.is_corosyc_running()
+        status.is_service_running("corosync")
         or
-        status.is_pacemaker_running()
+        status.is_service_running("pacemaker")
+        or
+        status.is_service_running("pacemaker_remote")
     ):
         utils.err(
             "Cluster is currently running on this node. You need to stop "
@@ -502,6 +557,7 @@ def config_import_cman(argv):
     cluster_conf = settings.cluster_conf_file
     dry_run_output = None
     output_format = "cluster.conf" if utils.is_rhel6() else "corosync.conf"
+    dist = None
     invalid_args = False
     for arg in argv:
         if "=" in arg:
@@ -518,6 +574,8 @@ def config_import_cman(argv):
                     output_format = value
                 else:
                     invalid_args = True
+            elif name == "dist":
+                dist = value
             else:
                 invalid_args = True
         else:
@@ -535,12 +593,34 @@ def config_import_cman(argv):
     force = "--force" in utils.pcs_options
     interactive = "--interactive" in utils.pcs_options
 
+    if dist is not None:
+        if output_format == "cluster.conf":
+            if not clufter.facts.cluster_pcs_flatiron("linux", dist.split(",")):
+                utils.err("dist does not match output-format")
+        elif output_format == "corosync.conf":
+            if not clufter.facts.cluster_pcs_needle("linux", dist.split(",")):
+                utils.err("dist does not match output-format")
+    elif (
+        (output_format == "cluster.conf" and utils.is_rhel6())
+        or
+        (output_format == "corosync.conf" and not utils.is_rhel6())
+    ):
+        dist = ",".join(platform.linux_distribution(full_distribution_name=0))
+    elif output_format == "cluster.conf":
+        dist = "redhat,6.7,Santiago"
+    elif output_format == "corosync.conf":
+        dist = "redhat,7.1,Maipo"
+    else:
+        # for output-format=pcs-command[-verbose]
+        dist = ",".join(platform.linux_distribution(full_distribution_name=0))
+
     clufter_args = {
         "input": str(cluster_conf),
         "cib": {"passin": "bytestring"},
         "nocheck": force,
         "batch": True,
         "sys": "linux",
+        "dist": dist,
         # Make it work on RHEL6 as well for sure
         "color": "always" if sys.stdout.isatty() else "never"
     }
@@ -553,11 +633,9 @@ def config_import_cman(argv):
         logging.getLogger("clufter").setLevel(logging.DEBUG)
     if output_format == "cluster.conf":
         clufter_args["ccs_pcmk"] = {"passin": "bytestring"}
-        clufter_args["dist"] = "redhat,6.7,Santiago"
         cmd_name = "ccs2pcs-flatiron"
     elif output_format == "corosync.conf":
         clufter_args["coro"] = {"passin": "struct"}
-        clufter_args["dist"] = "redhat,7.1,Maipo"
         cmd_name = "ccs2pcs-needle"
     elif output_format in ("pcs-commands", "pcs-commands-verbose"):
         clufter_args["output"] = {"passin": "bytestring"}
@@ -571,7 +649,15 @@ def config_import_cman(argv):
             clufter_args["text_width"] = "-1"
             clufter_args["silent"] = False
             clufter_args["noguidance"] = False
-        cmd_name = "ccs2pcscmd-flatiron"
+        if clufter.facts.cluster_pcs_flatiron("linux", dist.split(",")):
+            cmd_name = "ccs2pcscmd-flatiron"
+        elif clufter.facts.cluster_pcs_needle("linux", dist.split(",")):
+            cmd_name = "ccs2pcscmd-needle"
+        else:
+            utils.err(
+                "unrecognized dist, try something recognized"
+                + " (e. g. rhel,6.8 or redhat,7.3 or debian,7 or ubuntu,trusty)"
+            )
     clufter_args_obj = type(str("ClufterOptions"), (object, ), clufter_args)
 
     # run convertor
@@ -684,29 +770,36 @@ def config_export_pcs_commands(argv, verbose=False):
     interactive = "--interactive" in utils.pcs_options
     invalid_args = False
     output_file = None
+    dist = None
     for arg in argv:
         if "=" in arg:
             name, value = arg.split("=", 1)
             if name == "output":
                 output_file = value
+            elif name == "dist":
+                dist = value
             else:
                 invalid_args = True
         else:
             invalid_args = True
-    if invalid_args or not output_file:
+    # check options
+    if invalid_args:
         usage.config(["export", "pcs-commands"])
         sys.exit(1)
+    # complete optional options
+    if dist is None:
+        dist = ",".join(platform.linux_distribution(full_distribution_name=0))
 
     # prepare convertor options
     clufter_args = {
         "nocheck": force,
         "batch": True,
         "sys": "linux",
+        "dist": dist,
         # Make it work on RHEL6 as well for sure
         "color": "always" if sys.stdout.isatty() else "never",
         "coro": settings.corosync_conf_file,
         "ccs": settings.cluster_conf_file,
-        "output": {"passin": "bytestring"},
         "start_wait": "60",
         "tmp_cib": "tmp-cib.xml",
         "force": force,
@@ -714,6 +807,10 @@ def config_export_pcs_commands(argv, verbose=False):
         "silent": True,
         "noguidance": True,
     }
+    if output_file:
+        clufter_args["output"] = {"passin": "bytestring"}
+    else:
+        clufter_args["output"] = "-"
     if interactive:
         if "EDITOR" not in os.environ:
             utils.err("$EDITOR environment variable is not set")
@@ -738,13 +835,14 @@ def config_export_pcs_commands(argv, verbose=False):
         "Error: unable to export cluster configuration"
     )
 
-    # save commands
-    ok, message = utils.write_file(
-        output_file,
-        clufter_args_obj.output["passout"]
-    )
-    if not ok:
-        utils.err(message)
+    # save commands if not printed to stdout by clufter
+    if output_file:
+        ok, message = utils.write_file(
+            output_file,
+            clufter_args_obj.output["passout"]
+        )
+        if not ok:
+            utils.err(message)
 
 def run_clufter(cmd_name, cmd_args, debug, force, err_prefix):
     try:
