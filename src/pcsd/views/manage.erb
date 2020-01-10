@@ -8,7 +8,7 @@
 	  <td>
 	      <a href="#" class="x sprites"></a>
 	    <div class="link">
-	      <a id="manage_remove_cluster" href="#" onclick="verify_remove('cluster','You must select at least one cluster to remove', 'Remove Cluster(s)','Cluster Removal');">Remove</a>
+	      <a id="manage_remove_cluster" href="#" onclick="verify_remove_clusters();">Remove</a>
 	    </div>
 	  </td>
 	  <td>
@@ -34,7 +34,7 @@
     </td>
   </tr>
   <tr id="cluster_list_row" {{bind-attr style="Pcs.manage_page"}}>
-    <td id="cluster_list" class="node_list" style="width:400px;">
+    <td id="cluster_list" class="node_list" style="width:350px;">
       <%= erb :_cluster_list %>
     </td>
     <td id="node_info" colspan=2>
@@ -42,44 +42,153 @@
 	<div id="node_info_header_title">INFORMATION ABOUT CLUSTERS</div>
       </div>
       <div id="node_sub_info">
-	<div id="no_cluster_selected">Select a cluster to view more detailed cluster information</div>
-	<% @clusters.each do |c| %>
-	  <div id="cluster_info_<%=c.name%>" style="display:none;">
-	    <table>
-	      <tr><td style="text-align:right"><b>Cluster:</b>&nbsp;</td><td><%=c.name%></td></tr>
-	      <% first = true %>
-	      <% c.nodes.each { |n| %>
-		<%= '<tr><td style="text-align:right"><b>Nodes:</b>&nbsp;</td>' if first %>
-		<%= "<tr><td></td>" if not first %>
-		  <td><%=n%></td></tr>
-		<% first = false %>
-	      <% } %>
-	    </table>
-	  </div>
-	<% end %>
+        {{#if Pcs.clusterController.cur_cluster}}
+        <div {{bind-attr id=Pcs.clusterController.cur_cluster.div_id}}>
+          <table>
+            <tr>
+              <td style="text-align:right">
+                <b>Cluster:</b>&nbsp;
+              </td>
+              <td>
+                {{#if Pcs.clusterController.cur_cluster.forbidden}}
+                  {{Pcs.clusterController.cur_cluster.name}}
+                {{else}}
+                  <a {{bind-attr href=Pcs.clusterController.cur_cluster.url_link}}>{{Pcs.clusterController.cur_cluster.name}}</a> {{{Pcs.clusterController.cur_cluster.quorum_show}}}
+                {{/if}}
+              </td>
+            </tr>
+            {{#if Pcs.clusterController.cur_cluster.error_list}}
+              <tr><td style="text-align:right"><b>Errors:</b>&nbsp;</td><td></td></tr>
+            {{/if}}
+            {{#each Pcs.clusterController.cur_cluster.error_list}}
+              <tr><td></td><td style="color: red;">{{{message}}}</td></tr>
+            {{/each}}
+            {{#if Pcs.clusterController.cur_cluster.warning_list}}
+              <tr><td style="text-align:right"><b>Warnings:</b>&nbsp;</td><td></td></tr>
+            {{/if}}
+            {{#each Pcs.clusterController.cur_cluster.warning_list}}
+              <tr><td></td><td style="color: orange;">{{{message}}}</td></tr>
+            {{/each}}
+          </table><br>
+          {{#unless Pcs.clusterController.cur_cluster.forbidden}}
+          <table style="clear:left;float:left" class="nodes_list">
+            <tr>
+              <td class="datatable_header hover-pointer" onclick="show_hide_dashboard(this, 'nodes');">
+                <span style="display: none;" class="downarrow sprites"></span>
+                <span style="" class="rightarrow sprites"></span>
+                Nodes ({{Pcs.clusterController.cur_cluster.nodes.length}} | {{#if Pcs.clusterController.cur_cluster.nodes_failed}}<span style="color: red">issues: {{Pcs.clusterController.cur_cluster.nodes_failed}}{{else}}<span style="color: green;">OK{{/if}}</span>)
+              <span style="font-size: 10px;">(displaying {{#if Pcs.clusterController.show_all_nodes}}all{{else}}only issues{{/if}})</span>
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <table class="datatable">
+                  <tr>
+                    <th style="width: 150px;">NODE</th>
+                    <th style="width: 100px;">STATUS</th>
+                    <th style="width: 70px;">QUORUM</th>
+                  </tr>
+                  {{#each node in Pcs.clusterController.cur_cluster.nodes}}
+                  <tr {{bind-attr title=node.tooltip}} {{bind-attr class=node.status_class}}>
+                    <td><a {{bind-attr href=node.url_link}}>{{node.name}}</a></td>
+                    <td {{bind-attr style=node.status_style}}>{{{node.status_icon}}}{{node.status}}</td>
+                    <td>{{{node.quorum_show}}}</td>
+                  </tr>
+                  {{/each}}
+                </table>
+              </td>
+            </tr>
+          </table>
+          {{#unless Pcs.clusterController.cur_cluster.status_unknown}}
+          <table style="clear:left;float:left" class="resources_list">
+            <tr>
+              <td class="datatable_header hover-pointer" onclick="show_hide_dashboard(this, 'resources');">
+                <span style="display: none;" class="downarrow sprites"></span>
+                <span style="" class="rightarrow sprites"></span>
+                Resources ({{Pcs.clusterController.cur_cluster.resource_list.length}} | {{#if Pcs.clusterController.cur_cluster.resources_failed}}<span style="color: red">issues: {{Pcs.clusterController.cur_cluster.resources_failed}}{{else}}<span style="color: green;">OK{{/if}}</span>)
+              <span style="font-size: 10px;">(displaying {{#if Pcs.clusterController.show_all_resources}}all{{else}}only issues{{/if}})</span>
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <table class="datatable">
+                  <tr>
+                    <th style="width: 150px;">RESOURCE</th>
+                    <th style="width: 100px;">STATUS</th>
+                  </tr>
+                  {{#each r in Pcs.clusterController.cur_cluster.resource_list}}
+                  <tr {{bind-attr title=r.tooltip}} {{bind-attr class=r.status_class}}>
+                    <td><a {{bind-attr href=r.url_link}}>{{r.id}}</a></td>
+                    <td {{bind-attr style=r.status_style}}>{{{r.status_icon}}}{{r.status}}</td>
+                  </tr>
+                  {{else}}
+                  <tr>
+                    <td>No resources</td>
+                    <td></td>
+                  </tr>
+                  {{/each}}
+                </table>
+              </td>
+            </tr>
+          </table>
+          <table style="clear:left;float:left" class="fence_list">
+            <tr>
+              <td class="datatable_header hover-pointer" onclick="show_hide_dashboard(this, 'fence');">
+                <span style="display: none;" class="downarrow sprites"></span>
+                <span style="" class="rightarrow sprites"></span>
+                Fence-devices ({{Pcs.clusterController.cur_cluster.fence_list.length}} | {{#if Pcs.clusterController.cur_cluster.fence_failed}}<span style="color: red">issues: {{Pcs.clusterController.cur_cluster.fence_failed}}{{else}}<span style="color: green;">OK{{/if}}</span>)
+              <span style="font-size: 10px;">(displaying {{#if Pcs.clusterController.show_all_fence}}all{{else}}only issues{{/if}})</span>
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <table class="datatable">
+                  <tr>
+                    <th style="width: 150px;">FENCE-DEVICE</th>
+                    <th style="width: 100px;">STATUS</th>
+                  </tr>
+                  {{#each f in Pcs.clusterController.cur_cluster.fence_list}}
+                  <tr {{bind-attr title=f.tooltip}} {{bind-attr class=f.status_class_fence}}>
+                    <td><a {{bind-attr href=f.url_link}}>{{f.id}}</a></td>
+                    <td {{bind-attr style=f.status_style}}>{{{f.status_icon}}}{{f.status}}</td>
+                  </tr>
+                  {{else}}
+                  <tr>
+                    <td>No fence devices</td>
+                    <td></td>
+                  </tr>
+                  {{/each}}
+                </table>
+              </td>
+            </tr>
+          </table>
+          {{/unless}}
+          {{/unless}}
+        </div>
+        {{else}}
+        <div id="no_cluster_selected">Select a cluster to view more detailed cluster information</div>
+        {{/if}}
       </div>
     </td>
   </tr>
 </table>
-<div id="verify_remove" style="display: none;">
-  <p style="font-size:12px;">Are you sure you want to remove the following cluster(s) from the GUI? (This only removes the cluster from the GUI, it does not stop the cluster from running)</p>
-  <span id="resource_to_remove"></span>
-</div>
+<%= erb :_dialogs %>
 <div id="add_existing_cluster" style="display: none;">
   <form id="add_existing_cluster_form" action="/manage/existingcluster" method="post">
     <br>
     Enter the hostname/IP of a node in a cluster that you would like to manage:
     <br>
     <br>
-    <table>
-      <tr><td align=center style="color: red" colspan=2"><span id="unable_to_connect_error_msg_ae" style="display:none;">Unable to contact node.<br>Please make sure pcsd is started and authenticated.<br/></span>
+    <table class="err_msg_table" style="width: 100%">
+      <tr><td align=center style="color: red" colspan=2"><span id="unable_to_connect_error_msg_ae" style="display:none;">Unable to contact node.<br>Please make sure pcsd is started.<br/></span>
 	  <span id="add_existing_cluster_error_msg" style="display:none;">
 	  </span>
       </td></tr>
+    </table>
+    <table>
       <tr><td align=right>Node Name/IP:</td><td><input size="50" name="node-name" type="text"></td></tr>
     </table>
   </form>
-</div>
 </div>
 <div id="create_new_cluster" style="display: none;">
   <form id="create_new_cluster_form" action="/manage/newcluster" method="post">
@@ -93,7 +202,9 @@
       <tr><td align=right>Node 2:</td><td><input size="50" name="node-2" type="text"></input></td></tr>
       <tr><td align=right>Node 3:</td><td><input size="50" name="node-3" type="text"></input></td></tr>
       <tr><td></td><td id="manage_more_nodes" onclick="create_cluster_add_nodes();" style="color: #2B85DB;">More nodes...</td></tr>
-      <tr><td align=center style="color: red" colspan=2"><span id="unable_to_connect_error_msg" style="display:none;">Unable to contact nodes highlighted in red.<br><span style="color:orange;">Unable to authenticate to nodes highlighted in orange.</span><br>Please make sure pcsd is started on all nodes.</span></td></tr>
+    </table>
+    <table class="err_msg_table" style="width:100%">
+      <tr><td align=center style="color: red" colspan=2"><span id="unable_to_connect_error_msg" style="display:none;">Unable to contact nodes highlighted in red.<br>Please make sure pcsd is started on all nodes.</span></td></tr>
       <tr><td align=center style="color: red" colspan=2"><span id="at_least_one_node_error_msg" style="display:none;">At least one valid node must be entered.</span></td></tr>
       <tr><td align=center style="color: red" colspan=2"><span id="bad_cluster_name_error_msg" style="display:none;">You may not leave the cluster name field blank</span></td></tr>
       <tr><td align=center style="color: red" colspan=2"><span id="addr0_addr1_mismatch_error_msg" style="display:none;">Ring 1 addresses do not match to Ring 0 addresses</span></td></tr>
@@ -330,7 +441,25 @@ Specify ring 1 address for each node if you want to use RRP." %>
   <% if @error == "duplicatenodename" %>
     The node, '<%=@errorval%>' is already configured in pcsd.  You may not add a node to two different clusters in pcsd.
   <% end %>
+  <% if @error == "cannotgettokens" %>
+    Unable to get authentication info from cluster '<%=@errorval%>'.
+  <% end %>
+  <% if @error == "cannotsavetokens" %>
+    Unable to authenticate all nodes on node '<%=@errorval%>'.
+  <% end %>
+  <% if @error == "authimposible" %>
+    Operation successful.<br>Unable to do correct authentication of cluster because it is running old version of pcs/pcsd.
+  <% end %>
   <% if @error == "unabletocreate" %>
-    Unable to create new cluster because cluster already exists on one or more of the nodes.  Run 'pcs cluster destroy' on all nodes to remove current cluster configuration.<br><br>(<%=@errorval%>)
+    Unable to create new cluster. If cluster already exists on one or more of the nodes run 'pcs cluster destroy' on all nodes to remove current cluster configuration.<br><br><%=nl2br(@errorval)%>
+  <% end %>
+  <% if @error == "configversionsconflict" %>
+    Configuration conflict detected.<br><br>Some nodes had a newer configuration than the local node.  Local node's configuration was updated.  Please repeat the last action if appropriate.
+  <% end %>
+  <% if @error == "permissiondenied" %>
+    Permission denied.
+  <% end %>
+  <% if @error == "genericerror" %>
+    <%=nl2br(@errorval)%>
   <% end %>
 </div>

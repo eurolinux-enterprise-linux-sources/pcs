@@ -1,10 +1,22 @@
---- pcs-0.9.122/pcsd/pcsd.rb.disable_gui	2014-06-13 16:57:42.240256197 -0500
-+++ pcs-0.9.122/pcsd/pcsd.rb	2014-06-13 17:03:42.171323230 -0500
-@@ -65,6 +65,6 @@ configure do
-   ISRHEL6 = is_rhel6
-   ISSYSTEMCTL = is_systemctl
--  DISABLE_GUI = false
-+  DISABLE_GUI = true
- 
-   OCF_ROOT = "/usr/lib/ocf"
-   HEARTBEAT_AGENTS_DIR = "/usr/lib/ocf/resource.d/heartbeat/"
+From 313ef2c77d531f42664b2e8e337279d28ab46778 Mon Sep 17 00:00:00 2001
+From: Ivan Devat <idevat@redhat.com>
+Date: Tue, 19 Jan 2016 08:36:56 +0100
+Subject: [PATCH] gui patch
+
+---
+ pcsd/pcsd.conf |    2 +-
+ 1 files changed, 1 insertions(+), 1 deletions(-)
+
+diff --git a/pcsd/pcsd.conf b/pcsd/pcsd.conf
+index 38c7ea2..80006f2 100644
+--- a/pcsd/pcsd.conf
++++ b/pcsd/pcsd.conf
+@@ -3,4 +3,4 @@
+ PCSD_DEBUG=false
+ RACK_ENV=production
+ # Set DISABLE_GUI to true to disable GUI frontend in pcsd
+-DISABLE_GUI=false
++DISABLE_GUI=true
+-- 
+1.7.1
+

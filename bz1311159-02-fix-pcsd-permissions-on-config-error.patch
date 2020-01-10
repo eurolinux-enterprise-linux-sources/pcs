@@ -1,0 +1,516 @@
+From 3ebd7e8afa0e2aae57c27b63f80bd93f1178e6b5 Mon Sep 17 00:00:00 2001
+From: Ivan Devat <idevat@redhat.com>
+Date: Tue, 22 Mar 2016 13:54:22 +0100
+Subject: [PATCH] bz-1311159-fix pcsd permissions on config error
+
+* missing config -> set haclient permissions
+* old config -> set haclient permissions
+* empty config -> set no permissions
+* malformed config -> set no permissions
+* fix handling of missing config files (pcs_settings.conf, tokens)
+---
+ pcsd/cfgsync.rb | 47 +++++++++++++++++++++++++++++++++++++++++------
+ pcsd/config.rb  | 56 +++++++++++++++++++++++++++++++++++++++-----------------
+ pcsd/pcs.rb     | 16 ++++++++--------
+ pcsd/pcsd.rb    | 28 +++++++++++-----------------
+ pcsd/remote.rb  | 30 +++++++++++++++---------------
+ 5 files changed, 114 insertions(+), 63 deletions(-)
+
+diff --git a/pcsd/cfgsync.rb b/pcsd/cfgsync.rb
+index 0cfb587..d64f6e7 100644
+--- a/pcsd/cfgsync.rb
++++ b/pcsd/cfgsync.rb
+@@ -50,16 +50,13 @@ module Cfgsync
+ 
+     def self.from_file(default=nil)
+       begin
++        return self.on_file_missing(default) if not File::exist?(@file_path)
+         file = nil
+         file = File.open(@file_path, File::RDONLY)
+         file.flock(File::LOCK_SH)
+         return self.from_text(file.read())
+       rescue => e
+-        $logger.warn(
+-          "Cannot read config '#{@name}' from '#{@file_path}': #{e.message}"
+-        )
+-        return self.from_text(default) if default
+-        raise
++        return self.on_file_read_error(e, default)
+       ensure
+         unless file.nil?
+           file.flock(File::LOCK_UN)
+@@ -155,6 +152,22 @@ module Cfgsync
+ 
+     protected
+ 
++    def self.on_file_missing(default)
++      $logger.warn(
++        "Cannot read config '#{@name}' from '#{@file_path}': No such file"
++      )
++      return self.from_text(default) if default
++      raise SystemCallError.new(@file_path, Errno::ENOENT::Errno)
++    end
++
++    def self.on_file_read_error(exception, default)
++      $logger.warn(
++        "Cannot read config '#{@name}' from '#{@file_path}': #{exception.message}"
++      )
++      return self.from_text(default) if default
++      raise exception
++    end
++
+     def initialize(text)
+       self.text = text
+     end
+@@ -166,7 +179,7 @@ module Cfgsync
+     end
+ 
+     def get_hash()
+-      return Digest::SHA1.hexdigest(self.text)
++      return Digest::SHA1.hexdigest(self.text || '')
+     end
+   end
+ 
+@@ -178,6 +191,17 @@ module Cfgsync
+ 
+     protected
+ 
++    def self.on_file_missing(default)
++      return self.from_text(nil)
++    end
++
++    def self.on_file_read_error(exception, default)
++      $logger.warn(
++        "Cannot read config '#{@name}' from '#{@file_path}': #{exception.message}"
++      )
++      return self.from_text('')
++    end
++
+     def get_version()
+       return PCSConfig.new(self.text).data_version
+     end
+@@ -208,6 +232,17 @@ module Cfgsync
+ 
+     protected
+ 
++    def self.on_file_missing(default)
++      return self.from_text(nil)
++    end
++
++    def self.on_file_read_error(exception, default)
++      $logger.warn(
++        "Cannot read config '#{@name}' from '#{@file_path}': #{exception.message}"
++      )
++      return self.from_text('')
++    end
++
+     def get_version()
+       return PCSTokens.new(self.text).data_version
+     end
+diff --git a/pcsd/config.rb b/pcsd/config.rb
+index 613bd85..c4b4c8a 100644
+--- a/pcsd/config.rb
++++ b/pcsd/config.rb
+@@ -16,10 +16,43 @@ class PCSConfig
+ 
+     input_clusters = []
+     input_permissions = {}
++    default_permissions = [
++      {
++        'type' => Permissions::TYPE_GROUP,
++        'name' => ADMIN_GROUP,
++        'allow' => [
++          Permissions::READ,
++          Permissions::WRITE,
++          Permissions::GRANT,
++        ]
++      },
++    ]
++
++    # set a reasonable default if file doesn't exist
++    # set default permissions for backwards compatibility (there is no way to
++    # differentiante between an old cluster without config and a new cluster
++    # without config)
++    # Since ADMIN_GROUP has access to pacemaker by default anyway, we can safely
++    # allow access in pcsd as well even for new clusters.
++    if cfg_text.nil?
++      @format_version = CURRENT_FORMAT
++      perm_list = []
++      default_permissions.each { |perm|
++        perm_list << Permissions::EntityPermissions.new(
++          perm['type'], perm['name'], perm['allow']
++        )
++      }
++      @permissions_local = Permissions::PermissionsSet.new(perm_list)
++      return
++    end
+ 
+-    # set a reasonable parseable default if got empty text
+-    cfg_text = "{\"format_version\": #{CURRENT_FORMAT}}" if cfg_text.empty?
++    # set a reasonable default if got empty text (i.e. file exists but is empty)
++    if cfg_text.strip.empty?
++      @format_version = CURRENT_FORMAT
++      return
++    end
+ 
++    # main parsing
+     begin
+       json = JSON.parse(cfg_text)
+       if json.is_a?(Array)
+@@ -52,19 +85,7 @@ class PCSConfig
+         # All members of 'haclient' group had unrestricted access.
+         # We give them access to most functions except reading tokens and keys,
+         # they also won't be able to add and remove nodes because of that.
+-        input_permissions = {
+-          'local_cluster' => [
+-            {
+-              'type' => Permissions::TYPE_GROUP,
+-              'name' => ADMIN_GROUP,
+-              'allow' => [
+-                Permissions::READ,
+-                Permissions::WRITE,
+-                Permissions::GRANT,
+-              ]
+-            },
+-          ],
+-        }
++        input_permissions = {'local_cluster' => default_permissions}
+         # backward compatibility code end
+       else
+         $logger.error("Unable to parse pcs_settings file")
+@@ -171,8 +192,9 @@ class PCSTokens
+     @tokens = {}
+ 
+     # set a reasonable parseable default if got empty text
+-    if cfg_text.empty?
+-      cfg_text = "{\"format_version\": #{CURRENT_FORMAT}, \"tokens\": {}}"
++    if cfg_text.nil? or cfg_text.strip.empty?
++      @format_version = CURRENT_FORMAT
++      return
+     end
+ 
+     begin
+diff --git a/pcsd/pcs.rb b/pcsd/pcs.rb
+index 9bc1cdf..ab19913 100644
+--- a/pcsd/pcs.rb
++++ b/pcsd/pcs.rb
+@@ -242,7 +242,7 @@ end
+ 
+ # Gets all of the nodes specified in the pcs config file for the cluster
+ def get_cluster_nodes(cluster_name)
+-  pcs_config = PCSConfig.new(Cfgsync::PcsdSettings.from_file('').text())
++  pcs_config = PCSConfig.new(Cfgsync::PcsdSettings.from_file().text())
+   clusters = pcs_config.clusters
+   cluster = nil
+   for c in clusters
+@@ -420,7 +420,7 @@ def add_node(session, new_nodename, all=false, auto_start=true)
+   end
+   $logger.info("Adding #{new_nodename} to pcs_settings.conf")
+   corosync_nodes = get_corosync_nodes()
+-  pcs_config = PCSConfig.new(Cfgsync::PcsdSettings.from_file('').text())
++  pcs_config = PCSConfig.new(Cfgsync::PcsdSettings.from_file().text())
+   pcs_config.update_cluster($cluster_name, corosync_nodes)
+   sync_config = Cfgsync::PcsdSettings.from_text(pcs_config.text())
+   # on version conflict just go on, config will be corrected eventually
+@@ -444,7 +444,7 @@ def remove_node(session, new_nodename, all=false)
+   end
+   $logger.info("Removing #{new_nodename} from pcs_settings.conf")
+   corosync_nodes = get_corosync_nodes()
+-  pcs_config = PCSConfig.new(Cfgsync::PcsdSettings.from_file('').text())
++  pcs_config = PCSConfig.new(Cfgsync::PcsdSettings.from_file().text())
+   pcs_config.update_cluster($cluster_name, corosync_nodes)
+   sync_config = Cfgsync::PcsdSettings.from_text(pcs_config.text())
+   # on version conflict just go on, config will be corrected eventually
+@@ -1003,12 +1003,12 @@ def is_cib_true(var)
+ end
+ 
+ def read_tokens()
+-  return PCSTokens.new(Cfgsync::PcsdTokens.from_file('').text()).tokens
++  return PCSTokens.new(Cfgsync::PcsdTokens.from_file().text()).tokens
+ end
+ 
+ def write_tokens(tokens)
+   begin
+-    cfg = PCSTokens.new(Cfgsync::PcsdTokens.from_file('').text())
++    cfg = PCSTokens.new(Cfgsync::PcsdTokens.from_file().text())
+     cfg.tokens = tokens
+     Cfgsync::PcsdTokens.from_text(cfg.text()).save()
+   rescue
+@@ -1124,7 +1124,7 @@ def pcs_auth(session, nodes, username, password, force=false, local=true)
+   }
+   if not new_tokens.empty?
+     cluster_nodes = get_corosync_nodes()
+-    tokens_cfg = Cfgsync::PcsdTokens.from_file('')
++    tokens_cfg = Cfgsync::PcsdTokens.from_file()
+     # only tokens used in pcsd-to-pcsd communication can and need to be synced
+     # those are accessible only when running under root account
+     if Process.uid != 0
+@@ -1815,8 +1815,8 @@ def status_v1_to_v2(status)
+   return new_status
+ end
+ 
+-def allowed_for_local_cluster(session, action)
+-  pcs_config = PCSConfig.new(Cfgsync::PcsdSettings.from_file('{}').text())
++def allowed_for_local_cluster(auth_user, action)
++  pcs_config = PCSConfig.new(Cfgsync::PcsdSettings.from_file().text())
+   return pcs_config.permissions_local.allows?(
+     session[:username], session[:usergroups], action
+   )
+diff --git a/pcsd/pcsd.rb b/pcsd/pcsd.rb
+index 8142613..3a414a6 100644
+--- a/pcsd/pcsd.rb
++++ b/pcsd/pcsd.rb
+@@ -31,12 +31,6 @@ def generate_cookie_secret
+   return SecureRandom.hex(30)
+ end
+ 
+-# make sure basic pcsd configs exist
+-FileUtils.touch([
+-  Cfgsync::PcsdSettings.file_path,
+-  Cfgsync::PcsdTokens.file_path,
+-])
+-
+ begin
+   secret = File.read(COOKIE_FILE)
+   secret_errors = verify_cookie_secret(secret)
+@@ -73,7 +67,7 @@ end
+ 
+ before do
+   if request.path != '/login' and not request.path == "/logout" and not request.path == '/remote/auth'
+-    protected! 
++    protected!
+   end
+   $cluster_name = get_cluster_name()
+   @errorval = session[:errorval]
+@@ -337,7 +331,7 @@ end
+ if not DISABLE_GUI
+   get('/login'){ erb :login, :layout => :main }
+ 
+-  get '/logout' do 
++  get '/logout' do
+     session.clear
+     erb :login, :layout => :main
+   end
+@@ -374,7 +368,7 @@ if not DISABLE_GUI
+ 
+   get '/permissions/?' do
+     @manage = true
+-    pcs_config = PCSConfig.new(Cfgsync::PcsdSettings.from_file('').text())
++    pcs_config = PCSConfig.new(Cfgsync::PcsdSettings.from_file().text())
+     @clusters = pcs_config.clusters.sort { |a, b| a.name <=> b.name }
+     erb :permissions, :layout => :main
+   end
+@@ -387,7 +381,7 @@ if not DISABLE_GUI
+     @user_types = []
+     @users_permissions = []
+ 
+-    pcs_config = PCSConfig.new(Cfgsync::PcsdSettings.from_file('').text())
++    pcs_config = PCSConfig.new(Cfgsync::PcsdSettings.from_file().text())
+ 
+     if not pcs_config.is_cluster_name_in_use(@cluster_name)
+       @error = 'Cluster not found'
+@@ -433,7 +427,7 @@ if not DISABLE_GUI
+ 
+   get '/managec/:cluster/main' do
+     @cluster_name = params[:cluster]
+-    pcs_config = PCSConfig.new(Cfgsync::PcsdSettings.from_file('').text())
++    pcs_config = PCSConfig.new(Cfgsync::PcsdSettings.from_file().text())
+     @clusters = pcs_config.clusters
+     @nodes = get_cluster_nodes(params[:cluster])
+     if @nodes == []
+@@ -619,7 +613,7 @@ if not DISABLE_GUI
+       else
+         definition = JSON.parse(out)
+       end
+-  
++
+       definition.each { |name, prop|
+         prop['value'] = properties[name]
+       }
+@@ -673,7 +667,7 @@ if not DISABLE_GUI
+   end
+ 
+   post '/manage/existingcluster' do
+-    pcs_config = PCSConfig.new(Cfgsync::PcsdSettings.from_file('').text())
++    pcs_config = PCSConfig.new(Cfgsync::PcsdSettings.from_file().text())
+     node = params['node-name']
+     code, result = send_request_with_token(
+       PCSAuth.getSuperuserSession(), node, 'status'
+@@ -722,7 +716,7 @@ if not DISABLE_GUI
+           redirect '/manage'
+         end
+ 
+-        sync_config = Cfgsync::PcsdTokens.from_file('')
++        sync_config = Cfgsync::PcsdTokens.from_file()
+         pushed, _ = Cfgsync::save_sync_new_tokens(
+           sync_config, new_tokens, get_corosync_nodes(), $cluster_name
+         )
+@@ -756,7 +750,7 @@ if not DISABLE_GUI
+       redirect '/manage'
+     end
+ 
+-    pcs_config = PCSConfig.new(Cfgsync::PcsdSettings.from_file('').text())
++    pcs_config = PCSConfig.new(Cfgsync::PcsdSettings.from_file().text())
+     @manage = true
+     @cluster_name = params[:clustername]
+     @nodes = []
+@@ -836,7 +830,7 @@ if not DISABLE_GUI
+         # we are waiting for the request to finish, so no locking is needed.
+         # If we are in a different cluster we just try twice to update the
+         # config, dealing with any updates in between.
+-        pcs_config = PCSConfig.new(Cfgsync::PcsdSettings.from_file('').text())
++        pcs_config = PCSConfig.new(Cfgsync::PcsdSettings.from_file().text())
+         pcs_config.clusters << Cluster.new(@cluster_name, @nodes)
+         sync_config = Cfgsync::PcsdSettings.from_text(pcs_config.text())
+         pushed, _ = Cfgsync::save_sync_new_version(
+@@ -857,7 +851,7 @@ if not DISABLE_GUI
+   end
+ 
+   post '/manage/removecluster' do
+-    pcs_config = PCSConfig.new(Cfgsync::PcsdSettings.from_file('').text())
++    pcs_config = PCSConfig.new(Cfgsync::PcsdSettings.from_file().text())
+     params.each { |k,v|
+       if k.start_with?("clusterid-")
+         pcs_config.remove_cluster(k.sub("clusterid-",""))
+diff --git a/pcsd/remote.rb b/pcsd/remote.rb
+index 4cdd76c..8a9714a 100644
+--- a/pcsd/remote.rb
++++ b/pcsd/remote.rb
+@@ -135,7 +135,7 @@ def cluster_status_gui(session, cluster_name, dont_update_config=false)
+   new_cluster_nodes.uniq!
+ 
+   if new_cluster_nodes.length > 0
+-    config = PCSConfig.new(Cfgsync::PcsdSettings.from_file('').text())
++    config = PCSConfig.new(Cfgsync::PcsdSettings.from_file().text())
+     if !(dont_update_config or config.cluster_nodes_equal?(cluster_name, new_cluster_nodes))
+       old_cluster_nodes = config.get_nodes(cluster_name)
+       $logger.info("Updating node list for: #{cluster_name} #{old_cluster_nodes}->#{new_cluster_nodes}")
+@@ -624,7 +624,7 @@ def get_permissions_remote(params, request, session)
+     return 403, 'Permission denied'
+   end
+ 
+-  pcs_config = PCSConfig.new(Cfgsync::PcsdSettings.from_file('').text())
++  pcs_config = PCSConfig.new(Cfgsync::PcsdSettings.from_file().text())
+   data = {
+     'user_types' => Permissions::get_user_types(),
+     'permission_types' => Permissions::get_permission_types(),
+@@ -690,7 +690,7 @@ def set_permissions_remote(params, request, session)
+   perm_set = Permissions::PermissionsSet.new(perm_list)
+ 
+   full_users_old = Set.new
+-  pcs_config = PCSConfig.new(Cfgsync::PcsdSettings.from_file('').text())
++  pcs_config = PCSConfig.new(Cfgsync::PcsdSettings.from_file().text())
+   pcs_config.permissions_local.entity_permissions_list.each{ |entity_perm|
+     if entity_perm.allow_list.include?(Permissions::FULL)
+       full_users_old << [entity_perm.type, entity_perm.name]
+@@ -715,7 +715,7 @@ def set_permissions_remote(params, request, session)
+   end
+ 
+   2.times {
+-    pcs_config = PCSConfig.new(Cfgsync::PcsdSettings.from_file('').text())
++    pcs_config = PCSConfig.new(Cfgsync::PcsdSettings.from_file().text())
+     pcs_config.permissions_local = perm_set
+     sync_config = Cfgsync::PcsdSettings.from_text(pcs_config.text())
+     pushed, _ = Cfgsync::save_sync_new_version(
+@@ -849,7 +849,7 @@ def remote_remove_nodes(params, request, session)
+     retval, output = remove_node(session, node, true)
+     out = out + output.join("\n")
+   }
+-  config = PCSConfig.new(Cfgsync::PcsdSettings.from_file('').text())
++  config = PCSConfig.new(Cfgsync::PcsdSettings.from_file().text())
+   if config.get_nodes($cluster_name) == nil or config.get_nodes($cluster_name).length == 0
+     return [200,"No More Nodes"]
+   end
+@@ -985,7 +985,7 @@ def node_status(params, request, session)
+ 
+   if not_authorized_nodes.length > 0
+     node.warning_list << {
+-      :message => 'Not authorized against node(s) ' + 
++      :message => 'Not authorized against node(s) ' +
+         not_authorized_nodes.join(', '),
+       :type => 'nodes_not_authorized',
+       :node_list => not_authorized_nodes,
+@@ -1100,7 +1100,7 @@ def status_all(params, request, session, nodes=[], dont_update_config=false)
+ 
+   node_list.uniq!
+   if node_list.length > 0
+-    config = PCSConfig.new(Cfgsync::PcsdSettings.from_file('').text())
++    config = PCSConfig.new(Cfgsync::PcsdSettings.from_file().text())
+     old_node_list = config.get_nodes(params[:cluster])
+     if !(dont_update_config or config.cluster_nodes_equal?(params[:cluster], node_list))
+       $logger.info("Updating node list for: #{params[:cluster]} #{old_node_list}->#{node_list}")
+@@ -1122,7 +1122,7 @@ def clusters_overview(params, request, session)
+   cluster_map = {}
+   forbidden_clusters = {}
+   threads = []
+-  config = PCSConfig.new(Cfgsync::PcsdSettings.from_file('').text())
++  config = PCSConfig.new(Cfgsync::PcsdSettings.from_file().text())
+   config.clusters.each { |cluster|
+     threads << Thread.new {
+       cluster_map[cluster.name] = {
+@@ -1254,7 +1254,7 @@ def clusters_overview(params, request, session)
+ 
+   # update clusters in PCSConfig
+   not_current_data = false
+-  config = PCSConfig.new(Cfgsync::PcsdSettings.from_file('').text())
++  config = PCSConfig.new(Cfgsync::PcsdSettings.from_file().text())
+   cluster_map.each { |cluster, values|
+     next if forbidden_clusters[cluster]
+     nodes = []
+@@ -1597,7 +1597,7 @@ def fence_device_metadata(params, request, session)
+   @fenceagent = FenceAgent.new(params[:resourcename])
+   @fenceagent.required_options, @fenceagent.optional_options, @fenceagent.advanced_options, @fenceagent.info = getFenceAgentMetadata(session, params[:resourcename])
+   @new_fenceagent = params[:new]
+-  
++
+   erb :fenceagentform
+ end
+ 
+@@ -1615,7 +1615,7 @@ def remove_resource(params, request, session)
+       command << '--force' if force
+       out, errout, retval = run_cmd(session, *command)
+       if retval != 0
+-        unless out.index(" does not exist.") != -1 and no_error_if_not_exists  
++        unless out.index(" does not exist.") != -1 and no_error_if_not_exists
+           errors += errout.join(' ').strip + "\n"
+         end
+       end
+@@ -2032,7 +2032,7 @@ def auth_gui_against_nodes(params, request, session)
+ 
+   if not new_tokens.empty?
+     cluster_nodes = get_corosync_nodes()
+-    tokens_cfg = Cfgsync::PcsdTokens.from_file('')
++    tokens_cfg = Cfgsync::PcsdTokens.from_file()
+     sync_successful, sync_responses = Cfgsync::save_sync_new_tokens(
+       tokens_cfg, new_tokens, cluster_nodes, $cluster_name
+     )
+@@ -2077,7 +2077,7 @@ def save_tokens(params, request, session)
+     end
+   }
+ 
+-  tokens_cfg = Cfgsync::PcsdTokens.from_file('')
++  tokens_cfg = Cfgsync::PcsdTokens.from_file()
+   sync_successful, sync_responses = Cfgsync::save_sync_new_tokens(
+     tokens_cfg, new_tokens, get_corosync_nodes(), $cluster_name
+   )
+@@ -2214,7 +2214,7 @@ def resource_ungroup(params, request, session)
+   unless params[:group_id]
+     return [400, 'group_id has to be specified.']
+   end
+-  
++
+   _, stderr, retval = run_cmd(
+     session, PCS, 'resource', 'ungroup', params[:group_id]
+   )
+@@ -2234,7 +2234,7 @@ def resource_clone(params, request, session)
+   unless params[:resource_id]
+     return [400, 'resource_id has to be specified.']
+   end
+-  
++
+   _, stderr, retval = run_cmd(
+     session, PCS, 'resource', 'clone', params[:resource_id]
+   )
+-- 
+1.8.3.1
+

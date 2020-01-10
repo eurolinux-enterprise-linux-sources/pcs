@@ -55,7 +55,6 @@ table {
 #header #logo {
   padding-top: 20px;
   padding-right: 15px;
-  float: left;
 }
 
 td.right {
@@ -623,6 +622,10 @@ tr td a.remove {
 .xdark { background-position: -32px -17px; }
 .plus { background-position: -48px -1px; }
 .check { background-position: -448px -1px; }
+.warning { background-position: -432px -1px; }
+.warningdark { background-position: -432px -17px; }
+.error { background-position: -384px -1px; }
+.errordark { background-position: -384px -17px; }
 .checkdark { background-position: -448px -17px; }
 .restart { background-position: -272px -17px; }
 .standby { background-position: -352px -16px; }
@@ -723,7 +726,7 @@ li.menuheader {
 }
 
 .node_selected {
-  background: #e4f5fd;
+  background-color: #e4f5fd;
 }
 
 .ui-progressbar .ui-progressbar-value {
@@ -750,4 +753,36 @@ li.menuheader {
 }
 #new_stonith_agent .long_desc_div {
   max-width: 350px !important;
+}
+
+.hidden {
+    display: none;
+}
+
+.element_name {
+  height: 25px;
+}
+.element_name div div {
+  margin-top: 3px;
+  height: 100%;
+}
+
+.tree-view {
+  width: 450px;
+}
+
+.mouse_on_row {
+  background-color: #e4f5fd;
+}
+
+.issue_table {
+  margin-top: 1.5em;
+}
+
+.status-error {
+  color: red;
+}
+
+.status-warning {
+  color: #ff6600;
 }

@@ -1,0 +1,24 @@
+From 2026366bf42b1ec8d9e786b9cc9a86d8b63deb38 Mon Sep 17 00:00:00 2001
+From: Radek Steiger <rsteiger@redhat.com>
+Date: Mon, 15 Feb 2016 13:15:48 +0100
+Subject: [PATCH] fix occasional deadlock when running processes
+
+---
+ pcs/utils.py | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/pcs/utils.py b/pcs/utils.py
+index 554dcdd..d2a841e 100644
+--- a/pcs/utils.py
++++ b/pcs/utils.py
+@@ -789,6 +789,7 @@ def run(
+             stdout=subprocess.PIPE,
+             stderr=(subprocess.PIPE if ignore_stderr else subprocess.STDOUT),
+             preexec_fn=subprocess_setup,
++            close_fds=True,
+             env=env_var,
+             # decodes newlines and in python3 also converts bytes to str
+             universal_newlines=(not PYTHON2 and not binary_output)
+-- 
+1.8.3.1
+

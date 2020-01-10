@@ -1,7 +1,14 @@
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+from __future__ import unicode_literals
+
 import sys
+
 import usage
 import utils
 import prop
+
 
 def acl_cmd(argv):
     if len(argv) == 0:
@@ -41,10 +48,10 @@ def acl_show(argv):
     properties = prop.get_set_properties(defaults=prop.get_default_properties())
     acl_enabled = properties.get("enable-acl", "").lower()
     if utils.is_cib_true(acl_enabled):
-        print "ACLs are enabled"
+        print("ACLs are enabled")
     else:
-        print "ACLs are disabled, run 'pcs acl enable' to enable"
-    print
+        print("ACLs are disabled, run 'pcs acl enable' to enable")
+    print()
 
     print_targets(dom)
     print_groups(dom)
@@ -57,11 +64,11 @@ def acl_disable(argv):
     prop.set_property(["enable-acl=false"])
 
 def acl_grant(argv):
-    print "Not yet implemented"
+    print("Not yet implemented")
 
 def acl_role(argv):
     if len(argv) < 2:
-        usage.acl("role")
+        usage.acl(["role"])
         sys.exit(1)
 
     dom = utils.get_cib_dom()
@@ -87,31 +94,16 @@ def acl_role(argv):
         if description != "":
             element.setAttribute("description", description)
         acls.appendChild(element)
-        
-        while (len(argv) > 2):
-            rwd = argv.pop(0)
-            if not rwd in ["read","write","deny"]:
-                usage.acl("role create")
-                sys.exit(1)
-            se = dom.createElement("acl_permission")
-            se.setAttribute("id", utils.find_unique_id(dom,role_name + "-" + rwd))
-            se.setAttribute("kind", rwd)
-            xp_id = argv.pop(0)
-            if xp_id == "xpath":
-                xpath_query = argv.pop(0)
-                se.setAttribute("xpath",xpath_query)
-            elif xp_id == "id":
-                acl_ref = argv.pop(0)
-                se.setAttribute("reference",acl_ref)
-            else:
-                usage.acl("role create")
 
-            element.appendChild(se)
-
+        if not add_permissions_to_role(element, argv):
+            usage.acl(["role create"])
+            sys.exit(1)
         utils.replace_cib_configuration(dom)
+
     elif command == "delete":
         if len(argv) < 1:
-            usage.acl("acl role delete")
+            usage.acl(["role delete"])
+            sys.exit(1)
 
         role_id = argv.pop(0)
         found = False
@@ -135,7 +127,7 @@ def acl_role(argv):
         utils.replace_cib_configuration(dom)
     elif command == "assign":
         if len(argv) < 2:
-            usage.acl("role assign")
+            usage.acl(["role assign"])
             sys.exit(1)
 
         if len(argv) == 2:
@@ -145,7 +137,7 @@ def acl_role(argv):
             role_id = argv[0]
             ug_id = argv[2]
         else:
-            usage.acl("role assign")
+            usage.acl(["role assign"])
             sys.exit(1)
 
         found = False
@@ -176,7 +168,7 @@ def acl_role(argv):
         utils.replace_cib_configuration(dom)
     elif command == "unassign":
         if len(argv) < 2:
-            usage.acl("role unassign")
+            usage.acl(["role unassign"])
             sys.exit(1)
 
         role_id = argv.pop(0)
@@ -216,10 +208,10 @@ def acl_role(argv):
 def acl_target(argv,group=False):
     if len(argv) < 2:
         if group:
-            usage.acl("group")
+            usage.acl(["group"])
             sys.exit(1)
         else:
-            usage.acl("target")
+            usage.acl(["user"])
             sys.exit(1)
 
     dom = utils.get_cib_dom()
@@ -245,6 +237,8 @@ def acl_target(argv,group=False):
 
         acls.appendChild(element)
         for role in argv:
+            if not utils.dom_get_element_with_id(acls, "acl_role", role):
+                utils.err("cannot find acl role: %s" % role)
             r = dom.createElement("role")
             r.setAttribute("id", role)
             element.appendChild(r)
@@ -270,14 +264,14 @@ def acl_target(argv,group=False):
         utils.replace_cib_configuration(dom)
     else:
         if group:
-            usage.acl("group")
+            usage.acl(["group"])
         else:
-            usage.acl("target")
+            usage.acl(["user"])
         sys.exit(1)
 
 def acl_permission(argv):
     if len(argv) < 1:
-        usage.acl("permission")
+        usage.acl(["permission"])
         sys.exit(1)
 
     dom = utils.get_cib_dom()
@@ -286,7 +280,7 @@ def acl_permission(argv):
     command = argv.pop(0)
     if command == "add":
         if len(argv) < 4:
-            usage.acl("permission add")
+            usage.acl(["permission add"])
             sys.exit(1)
         role_id = argv.pop(0)
         found = False
@@ -298,27 +292,17 @@ def acl_permission(argv):
             acl_role(["create", role_id] + argv) 
             return
 
-        while len(argv) >= 3:
-            kind = argv.pop(0)
-            se = dom.createElement("acl_permission")
-            se.setAttribute("id", utils.find_unique_id(dom, role_id + "-" + kind))
-            se.setAttribute("kind", kind)
-            xp_id = argv.pop(0).lower()
-            if xp_id == "xpath":
-                xpath_query = argv.pop(0)
-                se.setAttribute("xpath",xpath_query)
-            elif xp_id == "id":
-                acl_ref = argv.pop(0)
-                se.setAttribute("reference",acl_ref)
-            else:
-                usage.acl("permission add")
-            role.appendChild(se)
-
+        if not argv:
+            usage.acl(["permission add"])
+            sys.exit(1)
+        if not add_permissions_to_role(role, argv):
+            usage.acl(["permission add"])
+            sys.exit(1)
         utils.replace_cib_configuration(dom)
 
     elif command == "delete":
         if len(argv) < 1:
-            usage.acl("permission delete")
+            usage.acl(["permission delete"])
             sys.exit(1)
 
         perm_id = argv.pop(0)
@@ -333,32 +317,30 @@ def acl_permission(argv):
         utils.replace_cib_configuration(dom)
 
     else:
-        usage.acl("permission")
+        usage.acl(["permission"])
         sys.exit(1)
 
 def print_groups(dom):
     for elem in dom.getElementsByTagName("acl_group"):
-        print "Group: " + elem.getAttribute("id")
-        print "  Roles:",
+        print("Group: " + elem.getAttribute("id"))
         role_list = []
         for role in elem.getElementsByTagName("role"):
             role_list.append(role.getAttribute("id"))
-        print " ".join(role_list)
+        print(" ".join(["  Roles:"] + role_list))
 
 def print_targets(dom):
     for elem in dom.getElementsByTagName("acl_target"):
-        print "User: " + elem.getAttribute("id")
-        print "  Roles:",
+        print("User: " + elem.getAttribute("id"))
         role_list = []
         for role in elem.getElementsByTagName("role"):
             role_list.append(role.getAttribute("id"))
-        print " ".join(role_list)
+        print(" ".join(["  Roles:"] + role_list))
 
 def print_roles(dom):
     for elem in dom.getElementsByTagName("acl_role"):
-        print "Role: " + elem.getAttribute("id")
+        print("Role: " + elem.getAttribute("id"))
         if elem.getAttribute("description"):
-            print "  Description: " + elem.getAttribute("description")
+            print("  Description: " + elem.getAttribute("description"))
         for perm in elem.getElementsByTagName("acl_permission"):
             perm_name = "  Permission: " + perm.getAttribute("kind")
             if "xpath" in perm.attributes.keys():
@@ -366,7 +348,7 @@ def print_roles(dom):
             elif "reference" in perm.attributes.keys():
                 perm_name += " id " + perm.getAttribute("reference")
             perm_name += " (" + perm.getAttribute("id") + ")"
-            print perm_name
+            print(perm_name)
 
 def get_acls(dom):        
     acls = dom.getElementsByTagName("acls")
@@ -379,3 +361,28 @@ def get_acls(dom):
     else:
         acls = acls[0]
     return (dom,acls)
+
+def add_permissions_to_role(role_element, argv):
+    dom = role_element.ownerDocument
+    role_id = role_element.getAttribute("id")
+    while argv:
+        if len(argv) < 3:
+            return False
+        rwd = argv.pop(0).lower()
+        if not rwd in ["read", "write", "deny"]:
+            return False
+        se = dom.createElement("acl_permission")
+        se.setAttribute("id", utils.find_unique_id(dom, role_id + "-" + rwd))
+        se.setAttribute("kind", rwd)
+        xp_id = argv.pop(0).lower()
+        if xp_id == "xpath":
+            xpath_query = argv.pop(0)
+            se.setAttribute("xpath", xpath_query)
+        elif xp_id == "id":
+            acl_ref = argv.pop(0)
+            se.setAttribute("reference", acl_ref)
+        else:
+            return False
+        role_element.appendChild(se)
+    return True
+

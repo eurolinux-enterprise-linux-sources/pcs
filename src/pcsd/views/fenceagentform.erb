@@ -4,7 +4,7 @@
     <table style="clear:left; float:left; margin-top: 25px;">
       <tr>
         <td><div class="bold">Description:</div></td>
-        <td><span class="reg" style="float:left;"><%=h(@fenceagent.short_desc)%>&nbsp;</span>&nbsp;<span title="<%=h(@fenceagent.long_desc)%>" onclick="$(this).closest('table').find('.long_desc_div').toggle();" class="infoicon sprites" style="margin-top:2px;"></span></td>
+        <td><span class="reg" style="float:left;"><%=h(@fenceagent.short_desc)%>&nbsp;</span>&nbsp;<span title="<%=nl2br(h(@fenceagent.long_desc))%>" onclick="$(this).closest('table').find('.long_desc_div').toggle();" class="infoicon sprites" style="margin-top:2px;"></span></td>
       </tr>
       <tr>
         <td></td>
@@ -32,7 +32,7 @@
 	    &nbsp;<%= name %>
 	  </td>
 	  <td>
-	    <input placeholder="<%=desc[0]%>" style="margin-right: 50px;" type="text" name="<%= @cur_resource && @cur_resource.options[name] ? "_res_paramne_" : "_res_paramempty_"%><%=name%>" value="<%=@cur_resource.options[name] if (@existing_resource and @cur_resource and @cur_resource.options)%>" size="35" class="text_field">
+	    <input placeholder="<%=desc[0]%>" style="margin-right: 50px;" type="text" name="<%= @cur_resource && @cur_resource.instance_attr[name] ? "_res_paramne_" : "_res_paramempty_"%><%=name%>" value="<%=h(@cur_resource.instance_attr[name].value) if (@existing_resource and @cur_resource and @cur_resource.instance_attr[name])%>" size="35" class="text_field">
 	  </td>
 	</tr>
       <% } %>
@@ -48,7 +48,7 @@
 	    &nbsp;<%= name %>
 	  </td>
 	  <td>
-            <input placeholder="<%=desc[0]%>" style="margin-right: 50px;" type="text" name="<%= @cur_resource && @cur_resource.options[name] ? "_res_paramne_" : "_res_paramempty_"%><%=name%>" value="<%=@cur_resource.options[name] if @existing_resource and @cur_resource and @cur_resource.options%>" size="35" class="text_field">
+            <input placeholder="<%=desc[0]%>" style="margin-right: 50px;" type="text" name="<%= @cur_resource && @cur_resource.instance_attr[name] ? "_res_paramne_" : "_res_paramempty_"%><%=name%>" value="<%=h(@cur_resource.instance_attr[name].value) if @existing_resource and @cur_resource and @cur_resource.instance_attr[name]%>" size="35" class="text_field">
 	  </td>
 	</tr>
       <% } %>
@@ -64,7 +64,7 @@
         &nbsp;<%= name %>
       </td>
       <td>
-            <input placeholder="<%=desc[0]%>" style="margin-right: 50px;" type="text" name="<%= @cur_resource && @cur_resource.options[name] ? "_res_paramne_" : "_res_paramempty_"%><%=name%>" value="<%=@cur_resource.options[name] if @existing_resource and @cur_resource and @cur_resource.options%>" size="35" class="text_field">
+            <input placeholder="<%=desc[0]%>" style="margin-right: 50px;" type="text" name="<%= @cur_resource && @cur_resource.instance_attr[name] ? "_res_paramne_" : "_res_paramempty_"%><%=name%>" value="<%=h(@cur_resource.instance_attr[name].value) if @existing_resource and @cur_resource and @cur_resource.instance_attr[name]%>" size="35" class="text_field">
       </td>
     </tr>
       <% } %>

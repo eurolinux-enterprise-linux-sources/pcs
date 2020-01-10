@@ -1,8 +1,14 @@
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+from __future__ import unicode_literals
+
 import sys
 import os
+import os.path
 import re
 import datetime
-import cStringIO
+from io import BytesIO
 import tarfile
 import json
 from xml.dom.minidom import parse
@@ -30,6 +36,7 @@ import status
 import stonith
 import usage
 
+
 def config_cmd(argv):
     if len(argv) == 0:
         config_show(argv)
@@ -56,39 +63,49 @@ def config_cmd(argv):
             sys.exit(1)
     elif sub_cmd == "import-cman":
         config_import_cman(argv)
+    elif sub_cmd == "export":
+        if not argv:
+            usage.config(["export"])
+            sys.exit(1)
+        elif argv[0] == "pcs-commands":
+            config_export_pcs_commands(argv[1:])
+        elif argv[0] == "pcs-commands-verbose":
+            config_export_pcs_commands(argv[1:], True)
+        else:
+            usage.config(["export"])
+            sys.exit(1)
     else:
         usage.config()
         sys.exit(1)
 
 def config_show(argv):
-    print "Cluster Name: %s" % utils.getClusterName()
+    print("Cluster Name: %s" % utils.getClusterName())
     status.nodes_status(["config"])
-    print ""
-    print ""
+    print()
     config_show_cib()
     cluster.cluster_uidgid([], True)
 
 def config_show_cib():
-    print "Resources: "
+    print("Resources:")
     utils.pcs_options["--all"] = 1
     utils.pcs_options["--full"] = 1
     resource.resource_show([])
-    print ""
-    print "Stonith Devices: "
+    print()
+    print("Stonith Devices:")
     resource.resource_show([], True)
-    print "Fencing Levels: "
-    print ""
+    print("Fencing Levels:")
+    print()
     stonith.stonith_level_show()
     constraint.location_show([])
     constraint.order_show([])
     constraint.colocation_show([])
-    print ""
+    print()
     del utils.pcs_options["--all"]
-    print "Resources Defaults:"
+    print("Resources Defaults:")
     resource.show_defaults("rsc_defaults", indent=" ")
-    print "Operations Defaults:"
+    print("Operations Defaults:")
     resource.show_defaults("op_defaults", indent=" ")
-    print
+    print()
     prop.list_property([])
 
 def config_backup(argv):
@@ -104,15 +121,21 @@ def config_backup(argv):
 
     tar_data = config_backup_local()
     if outfile_name:
-        ok, message = utils.write_file(outfile_name, tar_data)
+        ok, message = utils.write_file(
+            outfile_name, tar_data, permissions=0o600, binary=True
+        )
         if not ok:
             utils.err(message)
     else:
-        sys.stdout.write(tar_data)
+        # in python3 stdout accepts str so we need to use buffer
+        if hasattr(sys.stdout, "buffer"):
+            sys.stdout.buffer.write(tar_data)
+        else:
+            sys.stdout.write(tar_data)
 
 def config_backup_local():
     file_list = config_backup_path_list()
-    tar_data = cStringIO.StringIO()
+    tar_data = BytesIO()
 
     try:
         tarball = tarfile.open(fileobj=tar_data, mode="w|bz2")
@@ -142,12 +165,36 @@ def config_restore(argv):
     if argv:
         infile_name = argv[0]
     if not infile_name:
-        infile_obj = cStringIO.StringIO(sys.stdin.read())
+        # in python3 stdin returns str so we need to use buffer
+        if hasattr(sys.stdin, "buffer"):
+            infile_obj = BytesIO(sys.stdin.buffer.read())
+        else:
+            infile_obj = BytesIO(sys.stdin.read())
 
-    if "--local" in utils.pcs_options:
-        config_restore_local(infile_name, infile_obj)
+    if os.getuid() == 0:
+        if "--local" in utils.pcs_options:
+            config_restore_local(infile_name, infile_obj)
+        else:
+            config_restore_remote(infile_name, infile_obj)
     else:
-        config_restore_remote(infile_name, infile_obj)
+        new_argv = ['config', 'restore']
+        new_stdin = None
+        if '--local' in utils.pcs_options:
+            new_argv.append('--local')
+        if infile_name:
+            new_argv.append(os.path.abspath(infile_name))
+        else:
+            new_stdin = infile_obj.read()
+        err_msgs, exitcode, std_out, std_err = utils.call_local_pcsd(
+            new_argv, True, new_stdin
+        )
+        if err_msgs:
+            for msg in err_msgs:
+                utils.err(msg, False)
+            sys.exit(1)
+        print(std_out)
+        sys.stderr.write(std_err)
+        sys.exit(exitcode)
 
 def config_restore_remote(infile_name, infile_obj):
     extracted = {
@@ -158,6 +205,7 @@ def config_restore_remote(infile_name, infile_obj):
     try:
         tarball = tarfile.open(infile_name, "r|*", infile_obj)
         while True:
+            # next(tarball) does not work in python2.6
             tar_member_info = tarball.next()
             if tar_member_info is None:
                 break
@@ -172,31 +220,46 @@ def config_restore_remote(infile_name, infile_obj):
     config_backup_check_version(extracted["version.txt"])
 
     node_list = utils.getNodesFromCorosyncConf(
-        extracted["cluster.conf" if utils.is_rhel6() else "corosync.conf"]
+        extracted["cluster.conf" if utils.is_rhel6() else "corosync.conf"].decode("utf-8")
     )
     if not node_list:
         utils.err("no nodes found in the tarball")
 
+    err_msgs = []
     for node in node_list:
         try:
             retval, output = utils.checkStatus(node)
             if retval != 0:
-                utils.err("unable to determine status of the node %s" % node)
+                err_msgs.append(output)
+                continue
             status = json.loads(output)
             if status["corosync"] or status["pacemaker"] or status["cman"]:
-                utils.err(
+                err_msgs.append(
                     "Cluster is currently running on node %s. You need to stop "
                         "the cluster in order to restore the configuration."
                     % node
                 )
+                continue
         except (ValueError, NameError):
-            utils.err("unable to determine status of the node %s" % node)
+            err_msgs.append("unable to determine status of the node %s" % node)
+    if err_msgs:
+        for msg in err_msgs:
+            utils.err(msg, False)
+        sys.exit(1)
+
+    # Temporarily disable config files syncing thread in pcsd so it will not
+    # rewrite restored files. 10 minutes should be enough time to restore.
+    # If node returns HTTP 404 it does not support config syncing at all.
+    for node in node_list:
+        retval, output = utils.pauseConfigSyncing(node, 10 * 60)
+        if not (retval == 0 or output.endswith("(HTTP error: 404)")):
+            utils.err(output)
 
     if infile_obj:
         infile_obj.seek(0)
         tarball_data = infile_obj.read()
     else:
-        with open(infile_name, "r") as tarball:
+        with open(infile_name, "rb") as tarball:
             tarball_data = tarball.read()
 
     error_list = []
@@ -220,12 +283,13 @@ def config_restore_local(infile_name, infile_obj):
                 "the cluster in order to restore the configuration."
         )
 
-    file_list = config_backup_path_list()
+    file_list = config_backup_path_list(with_uid_gid=True)
     tarball_file_list = []
     version = None
     try:
         tarball = tarfile.open(infile_name, "r|*", infile_obj)
         while True:
+            # next(tarball) does not work in python2.6
             tar_member_info = tarball.next()
             if tar_member_info is None:
                 break
@@ -255,6 +319,7 @@ def config_restore_local(infile_name, infile_obj):
             infile_obj.seek(0)
         tarball = tarfile.open(infile_name, "r|*", infile_obj)
         while True:
+            # next(tarball) does not work in python2.6
             tar_member_info = tarball.next()
             if tar_member_info is None:
                 break
@@ -267,10 +332,12 @@ def config_restore_local(infile_name, infile_obj):
                 path = os.path.dirname(path)
             if not extract_info:
                 continue
-            tarball.extractall(
-                os.path.dirname(extract_info["path"]),
-                [tar_member_info]
-            )
+            path_extract = os.path.dirname(extract_info["path"])
+            tarball.extractall(path_extract, [tar_member_info])
+            path_full = os.path.join(path_extract, tar_member_info.name)
+            file_attrs = extract_info["attrs"]
+            os.chmod(path_full, file_attrs["mode"])
+            os.chown(path_full, file_attrs["uid"], file_attrs["gid"])
         tarball.close()
     except (tarfile.TarError, EnvironmentError) as e:
         utils.err("unable to restore the cluster: %s" % e)
@@ -284,9 +351,9 @@ def config_restore_local(infile_name, infile_obj):
 
 def config_backup_path_list(with_uid_gid=False, force_rhel6=None):
     rhel6 = utils.is_rhel6() if force_rhel6 is None else force_rhel6
-    root_attrs = {
+    corosync_attrs = {
         "mtime": int(time.time()),
-        "mode": 0644,
+        "mode": 0o644,
         "uname": "root",
         "gname": "root",
         "uid": 0,
@@ -294,7 +361,7 @@ def config_backup_path_list(with_uid_gid=False, force_rhel6=None):
     }
     cib_attrs = {
         "mtime": int(time.time()),
-        "mode": 0600,
+        "mode": 0o600,
         "uname": settings.pacemaker_uname,
         "gname": settings.pacemaker_gname,
     }
@@ -316,25 +383,37 @@ def config_backup_path_list(with_uid_gid=False, force_rhel6=None):
         "cib.xml": {
             "path": os.path.join(settings.cib_dir, "cib.xml"),
             "required": True,
-            "attrs": cib_attrs,
+            "attrs": dict(cib_attrs),
         },
     }
     if rhel6:
         file_list["cluster.conf"] = {
             "path": settings.cluster_conf_file,
             "required": True,
-            "attrs": root_attrs,
+            "attrs": dict(corosync_attrs),
         }
     else:
         file_list["corosync.conf"] = {
             "path": settings.corosync_conf_file,
             "required": True,
-            "attrs": root_attrs,
+            "attrs": dict(corosync_attrs),
         }
         file_list["uidgid.d"] = {
             "path": settings.corosync_uidgid_dir.rstrip("/"),
             "required": False,
-            "attrs": root_attrs,
+            "attrs": dict(corosync_attrs),
+        }
+        file_list["pcs_settings.conf"] = {
+            "path": settings.pcsd_settings_conf_location,
+            "required": False,
+            "attrs": {
+                "mtime": int(time.time()),
+                "mode": 0o644,
+                "uname": "root",
+                "gname": "root",
+                "uid": 0,
+                "gid": 0,
+            },
         }
     return file_list
 
@@ -358,11 +437,8 @@ def config_backup_check_version(version):
         utils.err("Cannot determine version of the backup")
 
 def config_backup_add_version_to_tarball(tarball, version=None):
-    return utils.tar_add_file_data(
-        tarball,
-        version if version is not None else str(config_backup_version()),
-        "version.txt"
-    )
+    ver = version if version is not None else str(config_backup_version())
+    return utils.tar_add_file_data(tarball, ver.encode("utf-8"), "version.txt")
 
 def config_backup_version():
     return 1
@@ -388,7 +464,7 @@ def config_checkpoint_list():
             pass
     cib_list.sort()
     if not cib_list:
-        print "No checkpoints available"
+        print("No checkpoints available")
         return
     for cib_info in cib_list:
         print(
@@ -425,7 +501,7 @@ def config_import_cman(argv):
     # prepare convertor options
     cluster_conf = settings.cluster_conf_file
     dry_run_output = None
-    rhel6 = utils.is_rhel6()
+    output_format = "cluster.conf" if utils.is_rhel6() else "corosync.conf"
     invalid_args = False
     for arg in argv:
         if "=" in arg:
@@ -434,19 +510,24 @@ def config_import_cman(argv):
                 cluster_conf = value
             elif name == "output":
                 dry_run_output = value
-                if not dry_run_output.endswith(".tar.bz2"):
-                    dry_run_output += ".tar.bz2"
             elif name == "output-format":
-                if value == "corosync.conf":
-                    rhel6 = False
-                elif value == "cluster.conf":
-                    rhel6 = True
+                if value in (
+                    "cluster.conf", "corosync.conf",
+                    "pcs-commands", "pcs-commands-verbose",
+                ):
+                    output_format = value
                 else:
                     invalid_args = True
             else:
                 invalid_args = True
         else:
             invalid_args = True
+    if (
+        output_format not in ("pcs-commands", "pcs-commands-verbose")
+        and
+        (dry_run_output and not dry_run_output.endswith(".tar.bz2"))
+    ):
+        dry_run_output += ".tar.bz2"
     if invalid_args or not dry_run_output:
         usage.config(["import-cman"])
         sys.exit(1)
@@ -455,10 +536,13 @@ def config_import_cman(argv):
     interactive = "--interactive" in utils.pcs_options
 
     clufter_args = {
-        "input": cluster_conf,
+        "input": str(cluster_conf),
         "cib": {"passin": "bytestring"},
         "nocheck": force,
         "batch": True,
+        "sys": "linux",
+        # Make it work on RHEL6 as well for sure
+        "color": "always" if sys.stdout.isatty() else "never"
     }
     if interactive:
         if "EDITOR" not in os.environ:
@@ -467,52 +551,70 @@ def config_import_cman(argv):
         clufter_args["editor"] = os.environ["EDITOR"]
     if debug:
         logging.getLogger("clufter").setLevel(logging.DEBUG)
-    if rhel6:
+    if output_format == "cluster.conf":
         clufter_args["ccs_pcmk"] = {"passin": "bytestring"}
-    else:
+        clufter_args["dist"] = "redhat,6.7,Santiago"
+        cmd_name = "ccs2pcs-flatiron"
+    elif output_format == "corosync.conf":
         clufter_args["coro"] = {"passin": "struct"}
-    clufter_args_obj = type('ClufterOptions', (object, ), clufter_args)
+        clufter_args["dist"] = "redhat,7.1,Maipo"
+        cmd_name = "ccs2pcs-needle"
+    elif output_format in ("pcs-commands", "pcs-commands-verbose"):
+        clufter_args["output"] = {"passin": "bytestring"}
+        clufter_args["start_wait"] = "60"
+        clufter_args["tmp_cib"] = "tmp-cib.xml"
+        clufter_args["force"] = force
+        clufter_args["text_width"] = "80"
+        clufter_args["silent"] = True
+        clufter_args["noguidance"] = True
+        if output_format == "pcs-commands-verbose":
+            clufter_args["text_width"] = "-1"
+            clufter_args["silent"] = False
+            clufter_args["noguidance"] = False
+        cmd_name = "ccs2pcscmd-flatiron"
+    clufter_args_obj = type(str("ClufterOptions"), (object, ), clufter_args)
 
     # run convertor
-    try:
-        cmd_name = "ccs2pcs-flatiron" if rhel6 else "ccs2pcs-needle"
-        result = None
-        cmd_manager = clufter.command_manager.CommandManager.init_lookup(
-            cmd_name
-        )
-        result = cmd_manager.commands[cmd_name](clufter_args_obj)
-        error_message = ""
-    except Exception as e:
-        error_message = str(e)
-    if error_message or result != 0:
-        hints = []
-        hints.append("--interactive to solve the issues manually")
-        if not debug:
-            hints.append("--debug to get more information")
-        if not force:
-            hints.append("--force to override")
-        hints_string = "\nTry using %s." % ", ".join(hints) if hints else ""
-        sys.stderr.write(
+    run_clufter(
+        cmd_name, clufter_args_obj, debug, force,
             "Error: unable to import cluster configuration"
-            + (": %s" % error_message if error_message else "")
-            + hints_string
-            + "\n"
+    )
+
+    # save commands
+    if output_format in ("pcs-commands", "pcs-commands-verbose"):
+        ok, message = utils.write_file(
+            dry_run_output,
+            clufter_args_obj.output["passout"]
         )
-        sys.exit(1 if result is None else result)
+        if not ok:
+            utils.err(message)
+        return
 
     # put new config files into tarball
-    file_list = config_backup_path_list(with_uid_gid=True, force_rhel6=rhel6)
-    tar_data = cStringIO.StringIO()
+    file_list = config_backup_path_list(
+        force_rhel6=(output_format == "cluster.conf")
+    )
+    for file_item in file_list.values():
+        file_item["attrs"]["uname"] = "root"
+        file_item["attrs"]["gname"] = "root"
+        file_item["attrs"]["uid"] = 0
+        file_item["attrs"]["gid"] = 0
+        file_item["attrs"]["mode"] = 0o600
+    tar_data = BytesIO()
     try:
         tarball = tarfile.open(fileobj=tar_data, mode="w|bz2")
         config_backup_add_version_to_tarball(tarball)
         utils.tar_add_file_data(
-            tarball, clufter_args_obj.cib["passout"], "cib.xml",
+            tarball,
+            clufter_args_obj.cib["passout"].encode("utf-8"),
+            "cib.xml",
             **file_list["cib.xml"]["attrs"]
         )
-        if rhel6:
+        if output_format == "cluster.conf":
             utils.tar_add_file_data(
-                tarball, clufter_args_obj.ccs_pcmk["passout"], "cluster.conf",
+                tarball,
+                clufter_args_obj.ccs_pcmk["passout"].encode("utf-8"),
+                "cluster.conf",
                 **file_list["cluster.conf"]["attrs"]
             )
         else:
@@ -531,7 +633,9 @@ def config_import_cman(argv):
                 "struct", ("corosync", (), corosync_struct)
             )("bytestring")
             utils.tar_add_file_data(
-                tarball, corosync_conf_data, "corosync.conf",
+                tarball,
+                corosync_conf_data.encode("utf-8"),
+                "corosync.conf",
                 **file_list["corosync.conf"]["attrs"]
             )
             for uidgid in uidgid_list:
@@ -547,7 +651,9 @@ def config_import_cman(argv):
                     "struct", ("corosync", (), [("uidgid", uidgid, None)])
                 )("bytestring")
                 utils.tar_add_file_data(
-                    tarball, uidgid_data, "uidgid.d/" + filename,
+                    tarball,
+                    uidgid_data.encode("utf-8"),
+                    "uidgid.d/" + filename,
                     **file_list["uidgid.d"]["attrs"]
                 )
         tarball.close()
@@ -557,10 +663,112 @@ def config_import_cman(argv):
 
     #save tarball / remote restore
     if dry_run_output:
-        ok, message = utils.write_file(dry_run_output, tar_data.read())
+        ok, message = utils.write_file(
+            dry_run_output, tar_data.read(), permissions=0o600, binary=True
+        )
         if not ok:
             utils.err(message)
     else:
         config_restore_remote(None, tar_data)
     tar_data.close()
+
+def config_export_pcs_commands(argv, verbose=False):
+    if no_clufter:
+        utils.err(
+            "Unable to perform export due to missing python-clufter package"
+        )
+
+    # parse options
+    debug = "--debug" in utils.pcs_options
+    force = "--force" in utils.pcs_options
+    interactive = "--interactive" in utils.pcs_options
+    invalid_args = False
+    output_file = None
+    for arg in argv:
+        if "=" in arg:
+            name, value = arg.split("=", 1)
+            if name == "output":
+                output_file = value
+            else:
+                invalid_args = True
+        else:
+            invalid_args = True
+    if invalid_args or not output_file:
+        usage.config(["export", "pcs-commands"])
+        sys.exit(1)
+
+    # prepare convertor options
+    clufter_args = {
+        "nocheck": force,
+        "batch": True,
+        "sys": "linux",
+        # Make it work on RHEL6 as well for sure
+        "color": "always" if sys.stdout.isatty() else "never",
+        "coro": settings.corosync_conf_file,
+        "ccs": settings.cluster_conf_file,
+        "output": {"passin": "bytestring"},
+        "start_wait": "60",
+        "tmp_cib": "tmp-cib.xml",
+        "force": force,
+        "text_width": "80",
+        "silent": True,
+        "noguidance": True,
+    }
+    if interactive:
+        if "EDITOR" not in os.environ:
+            utils.err("$EDITOR environment variable is not set")
+        clufter_args["batch"] = False
+        clufter_args["editor"] = os.environ["EDITOR"]
+    if debug:
+        logging.getLogger("clufter").setLevel(logging.DEBUG)
+    if utils.usefile:
+        clufter_args["cib"] = os.path.abspath(utils.filename)
+    else:
+        clufter_args["cib"] = ("bytestring", utils.get_cib())
+    if verbose:
+        clufter_args["text_width"] = "-1"
+        clufter_args["silent"] = False
+        clufter_args["noguidance"] = False
+    clufter_args_obj = type(str("ClufterOptions"), (object, ), clufter_args)
+    cmd_name = "pcs2pcscmd-flatiron" if utils.is_rhel6() else "pcs2pcscmd-needle"
+
+    # run convertor
+    run_clufter(
+        cmd_name, clufter_args_obj, debug, force,
+        "Error: unable to export cluster configuration"
+    )
+
+    # save commands
+    ok, message = utils.write_file(
+        output_file,
+        clufter_args_obj.output["passout"]
+    )
+    if not ok:
+        utils.err(message)
+
+def run_clufter(cmd_name, cmd_args, debug, force, err_prefix):
+    try:
+        result = None
+        cmd_manager = clufter.command_manager.CommandManager.init_lookup(
+            cmd_name
+        )
+        result = cmd_manager.commands[cmd_name](cmd_args)
+        error_message = ""
+    except Exception as e:
+        error_message = str(e)
+    if error_message or result != 0:
+        hints = []
+        hints.append("--interactive to solve the issues manually")
+        if not debug:
+            hints.append("--debug to get more information")
+        if not force:
+            hints.append("--force to override")
+        hints_string = "\nTry using %s." % ", ".join(hints) if hints else ""
+        sys.stderr.write(
+            err_prefix
+            + (": %s" % error_message if error_message else "")
+            + hints_string
+            + "\n"
+        )
+        sys.exit(1 if result is None else result)
 

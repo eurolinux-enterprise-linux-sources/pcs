@@ -9,14 +9,65 @@
     if [ "$COMP_CWORD" -gt "2" ]; then cur3="${COMP_WORDS[COMP_CWORD-3]}";fi
 
     
+case "${cur3}" in
+  status)
+    ;;
+  node)
+    ;;
+  resource)
+    ;;
+  constraint)
+    ;;
+  acl)
+    ;;
+  stonith)
+    ;;
+  cluster)
+    ;;
+  property)
+    ;;
+  config)
+  case "${cur2}" in
+    checkpoint)
+      ;;
+    import-cman)
+      ;;
+    export)
+      case "${cur1}" in
+        pcs-commands|pcs-commands-verbose)
+          COMPREPLY=($(compgen -W "output=<filename>" -- ${cur}))
+          return 0
+          ;;
+        *)
+        ;;
+      esac
+      
+      ;;
+    *)
+    ;;
+  esac
+  
+    ;;
+  pcsd)
+    ;;
+  *)
+  ;;
+esac
+
 
 case "${cur2}" in
   status)
+    ;;
+  node)
     ;;
   resource)
   case "${cur1}" in
     group)
       COMPREPLY=($(compgen -W "add remove" -- ${cur}))
+      return 0
+      ;;
+    relocate)
+      COMPREPLY=($(compgen -W "run clear dry-run show" -- ${cur}))
       return 0
       ;;
     failcount)
@@ -99,16 +150,16 @@ case "${cur2}" in
       COMPREPLY=($(compgen -W "add remove" -- ${cur}))
       return 0
       ;;
-    reload)
-      COMPREPLY=($(compgen -W "corosync" -- ${cur}))
-      return 0
-      ;;
     remote-node)
       COMPREPLY=($(compgen -W "add remove" -- ${cur}))
       return 0
       ;;
     quorum)
       COMPREPLY=($(compgen -W "unblock" -- ${cur}))
+      return 0
+      ;;
+    reload)
+      COMPREPLY=($(compgen -W "corosync" -- ${cur}))
       return 0
       ;;
     *)
@@ -128,10 +179,16 @@ case "${cur2}" in
       COMPREPLY=($(compgen -W "output=<filename>" -- ${cur}))
       return 0
       ;;
+    export)
+      COMPREPLY=($(compgen -W "pcs-commands pcs-commands-verbose" -- ${cur}))
+      return 0
+      ;;
     *)
     ;;
   esac
   
+    ;;
+  pcsd)
     ;;
   *)
   ;;
@@ -143,8 +200,12 @@ case "${cur1}" in
     COMPREPLY=($(compgen -W "xml corosync cluster resources groups nodes pcsd" -- ${cur}))
     return 0
     ;;
+  node)
+    COMPREPLY=($(compgen -W "unmaintenance maintenance utilization" -- ${cur}))
+    return 0
+    ;;
   resource)
-    COMPREPLY=($(compgen -W "providers move meta agents manage unclone group create show cleanup master ungroup enable clone describe update disable restart debug-start clear list standards failcount unmanage defaults ban delete op" -- ${cur}))
+    COMPREPLY=($(compgen -W "debug-demote providers debug-stop move meta agents manage unclone group utilization create show debug-monitor cleanup master ungroup enable clone describe update disable relocate debug-promote restart debug-start clear list standards failcount unmanage defaults ban delete op" -- ${cur}))
     return 0
     ;;
   constraint)
@@ -160,7 +221,7 @@ case "${cur1}" in
     return 0
     ;;
   cluster)
-    COMPREPLY=($(compgen -W "uidgid node cib-push sync cib-upgrade kill reload verify start destroy corosync status pcsd-status enable certkey remote-node stop auth disable report unstandby cib quorum standby setup edit" -- ${cur}))
+    COMPREPLY=($(compgen -W "uidgid node cib-push edit sync cib-upgrade kill verify start destroy corosync status pcsd-status enable remote-node stop auth disable report unstandby cib quorum standby setup reload" -- ${cur}))
     return 0
     ;;
   property)
@@ -168,7 +229,11 @@ case "${cur1}" in
     return 0
     ;;
   config)
-    COMPREPLY=($(compgen -W "checkpoint restore import-cman backup" -- ${cur}))
+    COMPREPLY=($(compgen -W "checkpoint restore import-cman backup export" -- ${cur}))
+    return 0
+    ;;
+  pcsd)
+    COMPREPLY=($(compgen -W "clear-auth certkey sync-certificates" -- ${cur}))
     return 0
     ;;
   *)
@@ -178,7 +243,7 @@ esac
 
 
     if [ $COMP_CWORD -eq 1 ]; then
-        COMPREPLY=( $(compgen -W "resource cluster stonith property acl constraint status config" -- $cur) )
+        COMPREPLY=( $(compgen -W "resource cluster stonith property acl constraint status config pcsd node" -- $cur) )
     fi
     return 0
 

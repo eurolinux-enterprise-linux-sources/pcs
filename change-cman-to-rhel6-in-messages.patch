@@ -1,0 +1,202 @@
+From b99926165b818cfbe1aa9a259c79e308f78c129d Mon Sep 17 00:00:00 2001
+From: Tomas Jelinek <tojeline@redhat.com>
+Date: Fri, 18 Sep 2015 14:52:14 +0200
+Subject: [PATCH] change cman to rhel6 in messages
+
+---
+ pcs/cluster.py           | 14 +++++++-------
+ pcs/pcs.8                |  2 +-
+ pcs/test/test_cluster.py | 26 +++++++++++++-------------
+ pcs/usage.py             |  2 +-
+ pcsd/views/_dialogs.erb  |  2 +-
+ pcsd/views/manage.erb    | 16 ++++++++--------
+ pcsd/views/nodes.erb     |  2 +-
+ 7 files changed, 32 insertions(+), 32 deletions(-)
+
+diff --git a/pcs/cluster.py b/pcs/cluster.py
+index e7c408f..0658a4b 100644
+--- a/pcs/cluster.py
++++ b/pcs/cluster.py
+@@ -615,7 +615,7 @@ def cluster_setup_parse_options_cman(options):
+         if ring_missing_broadcast:
+             messages.append({
+                 "text": (
+-                    "Enabling broadcast for ring {0} as CMAN does not support "
++                    "Enabling broadcast for ring {0} as RHEL 6 does not support "
+                     + "broadcast in only one ring"
+                 ).format(ring_missing_broadcast),
+                 "type": "warning",
+@@ -636,7 +636,7 @@ def cluster_setup_parse_options_cman(options):
+     if transport == "udpu":
+         messages.append({
+             "text": (
+-                "Using udpu transport on a CMAN cluster, "
++                "Using udpu transport on a RHEL 6 cluster, "
+                 + "cluster restart is required after node add or remove"
+             ),
+             "type": "warning",
+@@ -708,7 +708,7 @@ def cluster_setup_parse_options_cman(options):
+     )
+     for opt_name in ignored_options_names:
+         if opt_name in options:
+-            text = "{0} ignored as it is not supported on CMAN clusters".format(
++            text = "{0} ignored as it is not supported on RHEL 6 clusters".format(
+                 opt_name
+             )
+             messages.append({
+@@ -1462,7 +1462,7 @@ def cluster_node(argv):
+             utils.err("Unable to update any nodes")
+         output, retval = utils.reloadCorosync()
+         if utils.is_cman_with_udpu_transport():
+-            print("Warning: Using udpu transport on a CMAN cluster, "
++            print("Warning: Using udpu transport on a RHEL 6 cluster, "
+                 + "cluster restart is required to apply node addition")
+     else:
+         if node0 not in utils.getNodesFromCorosyncConf():
+@@ -1527,7 +1527,7 @@ def cluster_node(argv):
+         output, retval = utils.reloadCorosync()
+         output, retval = utils.run(["crm_node", "--force", "-R", node0])
+         if utils.is_cman_with_udpu_transport():
+-            print("Warning: Using udpu transport on a CMAN cluster, "
++            print("Warning: Using udpu transport on a RHEL 6 cluster, "
+                 + "cluster restart is required to apply node removal")
+ 
+ def cluster_localnode(argv):
+@@ -1671,7 +1671,7 @@ def cluster_uidgid(argv, silent_list = False):
+ 
+ def cluster_get_corosync_conf(argv):
+     if utils.is_rhel6():
+-        utils.err("corosync.conf is not supported on CMAN clusters")
++        utils.err("corosync.conf is not supported on RHEL 6 clusters")
+ 
+     if len(argv) > 1:
+         usage.cluster()
+@@ -1838,7 +1838,7 @@ def cluster_quorum_unblock(argv):
+         sys.exit(1)
+ 
+     if utils.is_rhel6():
+-        utils.err("operation is not supported on CMAN clusters")
++        utils.err("operation is not supported on RHEL 6 clusters")
+ 
+     output, retval = utils.run(
+         ["corosync-cmapctl", "-g", "runtime.votequorum.wait_for_all_status"]
+diff --git a/pcs/pcs.8 b/pcs/pcs.8
+index 1f15b18..f0d0724 100644
+--- a/pcs/pcs.8
++++ b/pcs/pcs.8
+@@ -185,7 +185,7 @@ auth [node] [...] [\fB\-u\fR username] [\fB\-p\fR password] [\fB\-\-force\fR] [\
+ Authenticate pcs to pcsd on nodes specified, or on all nodes configured in corosync.conf if no nodes are specified (authorization tokens are stored in ~/.pcs/tokens or /var/lib/pcsd/tokens for root).  By default all nodes are also authenticated to each other, using \fB\-\-local\fR only authenticates the local node (and does not authenticate the remote nodes with each other).  Using \fB\-\-force\fR forces re-authentication to occur.
+ .TP
+ setup [\fB\-\-start\fR] [\fB\-\-local\fR] [\fB\-\-enable\fR] \fB\-\-name\fR <cluster name> <node1[,node1-altaddr]> [node2[,node2-altaddr]] [..] [\fB\-\-transport\fR <udpu|udp>] [\fB\-\-rrpmode\fR active|passive] [\fB\-\-addr0\fR <addr/net> [[[\fB\-\-mcast0\fR <address>] [\fB\-\-mcastport0\fR <port>] [\fB\-\-ttl0\fR <ttl>]] | [\fB\-\-broadcast0\fR]] [\fB\-\-addr1\fR <addr/net> [[[\fB\-\-mcast1\fR <address>] [\fB\-\-mcastport1\fR <port>] [\fB\-\-ttl1\fR <ttl>]] | [\fB\-\-broadcast1\fR]]]] [\fB\-\-wait_for_all\fR=<0|1>] [\fB\-\-auto_tie_breaker\fR=<0|1>] [\fB\-\-last_man_standing\fR=<0|1> [\fB\-\-last_man_standing_window\fR=<time in ms>]] [\fB\-\-ipv6\fR] [\fB\-\-token\fR <timeout>] [\fB\-\-token_coefficient\fR <timeout>] [\fB\-\-join\fR <timeout>] [\fB\-\-consensus\fR <timeout>] [\fB\-\-miss_count_const\fR <count>] [\fB\-\-fail_recv_const\fR <failures>]
+-Configure corosync and sync configuration out to listed nodes. \fB\-\-local\fR will only perform changes on the local node, \fB\-\-start\fR will also start the cluster on the specified nodes, \fB\-\-enable\fR will enable corosync and pacemaker on node startup, \fB\-\-transport\fR allows specification of corosync transport (default: udpu; udp for CMAN clusters), \fB\-\-rrpmode\fR allows you to set the RRP mode of the system. Currently only 'passive' is supported or tested (using 'active' is not recommended). The \fB\-\-wait_for_all\fR, \fB\-\-auto_tie_breaker\fR, \fB\-\-last_man_standing\fR, \fB\-\-last_man_standing_window\fR options are all documented in corosync's votequorum(5) man page.
++Configure corosync and sync configuration out to listed nodes. \fB\-\-local\fR will only perform changes on the local node, \fB\-\-start\fR will also start the cluster on the specified nodes, \fB\-\-enable\fR will enable corosync and pacemaker on node startup, \fB\-\-transport\fR allows specification of corosync transport (default: udpu; udp for RHEL 6 clusters), \fB\-\-rrpmode\fR allows you to set the RRP mode of the system. Currently only 'passive' is supported or tested (using 'active' is not recommended). The \fB\-\-wait_for_all\fR, \fB\-\-auto_tie_breaker\fR, \fB\-\-last_man_standing\fR, \fB\-\-last_man_standing_window\fR options are all documented in corosync's votequorum(5) man page.
+ 
+ \fB\-\-ipv6\fR will configure corosync to use ipv6 (instead of ipv4)
+ 
+diff --git a/pcs/usage.py b/pcs/usage.py
+index a7bfd84..c4ef564 100644
+--- a/pcs/usage.py
++++ b/pcs/usage.py
+@@ -591,7 +591,7 @@ Commands:
+         --start will also start the cluster on the specified nodes,
+         --enable will enable corosync and pacemaker on node startup,
+         --transport allows specification of corosync transport (default: udpu;
+-            udp for CMAN clusters),
++            udp for RHEL 6 clusters),
+         --rrpmode allows you to set the RRP mode of the system. Currently only
+             'passive' is supported or tested (using 'active' is not
+             recommended).
+diff --git a/pcsd/views/_dialogs.erb b/pcsd/views/_dialogs.erb
+index 02d8eab..ab4ff1c 100644
+--- a/pcsd/views/_dialogs.erb
++++ b/pcsd/views/_dialogs.erb
+@@ -21,7 +21,7 @@
+   <p style="font-size:12px;">Are you sure you want to remove the following nodes(s)?</p>
+   <span class="name_list"></span>
+   {{#if Pcs.is_cman_with_udpu_transport}}
+-    <p style="color: orange">This is a CMAN cluster with UDPU transport, cluster restart is required to apply node removal.</p>
++    <p style="color: orange">This is a RHEL 6 cluster with UDPU transport, cluster restart is required to apply node removal.</p>
+   {{/if}}
+ </div>
+ 
+diff --git a/pcsd/views/manage.erb b/pcsd/views/manage.erb
+index 1b53ec9..13439e1 100644
+--- a/pcsd/views/manage.erb
++++ b/pcsd/views/manage.erb
+@@ -208,9 +208,9 @@
+       <tr><td align=center style="color: red" colspan=2"><span id="at_least_one_node_error_msg" style="display:none;">At least one valid node must be entered.</span></td></tr>
+       <tr><td align=center style="color: red" colspan=2"><span id="bad_cluster_name_error_msg" style="display:none;">You may not leave the cluster name field blank</span></td></tr>
+       <tr><td align=center style="color: red" colspan=2"><span id="addr0_addr1_mismatch_error_msg" style="display:none;">Ring 1 addresses do not match to Ring 0 addresses</span></td></tr>
+-      <tr><td align=center style="color: red" colspan=2"><span id="cman_udpu_transport_error_msg" style="display:none;">Cannot use UDPU transport on CMAN cluster. Please select UDP transport in Advanced options.</span></td></tr>
++      <tr><td align=center style="color: red" colspan=2"><span id="cman_udpu_transport_error_msg" style="display:none;">Cannot use UDPU transport on RHEL 6 cluster. Please select UDP transport in Advanced options.</span></td></tr>
+       <tr><td align=center style="color: red" colspan=2"><span id="rhel_version_mismatch_error_msg" style="display:none;">Cannot create a cluster using nodes running different versions of RHEL.</span></td></tr>
+-      <tr><td align=center style="color: red" colspan=2"><span id="cman_mismatch_error_msg" style="display:none;">Cannot mix nodes running CMAN and nodes without CMAN in one cluster.</span></td></tr>
++      <tr><td align=center style="color: red" colspan=2"><span id="cman_mismatch_error_msg" style="display:none;">Cannot mix nodes running RHEL 6 and nodes running RHEL 7 in one cluster.</span></td></tr>
+     </table>
+     <span onclick='$(".advanced_open").toggle();$("#advanced_cluster_create_options").toggle();'><span class="advanced_open rightarrow sprites"></span><span class="advanced_open downarrow sprites" style="display:none;"></span>Advanced Options:</span>
+     <div id="advanced_cluster_create_options" style="display:none;">
+@@ -240,7 +240,7 @@ remaining 3 nodes will be fenced.
+ 
+ It is very useful when combined with Last Man Standing.
+ 
+-This option has no effect on CMAN cluster." %>
++This option has no effect on RHEL 6 cluster." %>
+ 	<% auto_tie_desc = "\
+ Enables Auto Tie Breaker (ATB) feature (default: off).
+ 
+@@ -253,7 +253,7 @@ partition, or the set of nodes that are still in contact with the \
+ node that has the lowest nodeid will remain quorate. The other nodes \
+ will be inquorate.
+ 
+-This option has no effect on CMAN cluster." %>
++This option has no effect on RHEL 6 cluster." %>
+ 	<% last_man_desc = "\
+ Enables Last Man Standing (LMS) feature (default: off).
+ 
+@@ -274,18 +274,18 @@ Using the above 8 node cluster example, with LMS enabled the cluster \
+ can retain quorum and continue operating by losing, in a cascade \
+ fashion, up to 6 nodes with only 2 remaining active.
+ 
+-This option has no effect on CMAN cluster." %>
++This option has no effect on RHEL 6 cluster." %>
+ 	<% last_man_window_desc = "\
+ Tunes Last Man Standing Window (default: 10000 ms)
+ 
+ The window of time between when a node (or group of nodes die) and quorum \
+ is recalculated if the 'Last Man Standing' option is enabled.
+ 
+-This option has no effect on CMAN cluster." %>
++This option has no effect on RHEL 6 cluster." %>
+ 	<% use_ipv6_desc = "\
+ Enables IPv6 for cluster communication (default: off)
+ 
+-This option has no effect on CMAN cluster." %>
++This option has no effect on RHEL 6 cluster." %>
+         <% token_timeout = "\
+ Sets time in milliseconds until a token loss is declared after not receiving \
+ a token (default: 1000 ms)" %>
+@@ -294,7 +294,7 @@ Sets time in milliseconds used for clusters with at least 3 nodes \
+ as a coefficient for real token timeout calculation \
+ (token + (number_of_nodes - 2) * token_coefficient) (default: 650 ms)
+ 
+-This option has no effect on CMAN cluster." %>
++This option has no effect on RHEL 6 cluster." %>
+         <% join_timeout = "\
+ Sets time in milliseconds to wait for join messages (default: 50 ms)" %>
+         <% consensus_timeout = "\
+diff --git a/pcsd/views/nodes.erb b/pcsd/views/nodes.erb
+index a554bc8..ba79db7 100644
+--- a/pcsd/views/nodes.erb
++++ b/pcsd/views/nodes.erb
+@@ -337,7 +337,7 @@
+       </tr>
+       {{#if Pcs.is_cman_with_udpu_transport}}
+       <tr>
+-        <td colspan="2" style="color: orange">This is a CMAN cluster with UDPU transport,<br>cluster restart is required to apply node addition.</td>
++        <td colspan="2" style="color: orange">This is a RHEL 6 cluster with UDPU transport,<br>cluster restart is required to apply node addition.</td>
+       </tr>
+       {{/if}}
+     </table>
+-- 
+1.9.1
+

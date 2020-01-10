@@ -5,7 +5,7 @@
 <tr {{bind-attr style="Pcs.acls_page"}}>
   <td id="remove_add" class="borderbottom">
     <div class="x sprites"></div>
-    <div class="link" onclick="verify_acl_role_remove();return false;">&nbsp;Remove&nbsp;&nbsp;&nbsp;&nbsp;</div>
+    <div class="link" onclick="verify_remove_acl_roles();return false;">&nbsp;Remove&nbsp;&nbsp;&nbsp;&nbsp;</div>
     <div class="plus sprites"></div>
     <div class="link" onclick="$('#add_acl_role').dialog({
         title: 'Add ACL Role',
@@ -68,20 +68,31 @@
               <tr><th>Type</th><th>XPath/ID</th><th>Query/ID</th><th>Remove</th></tr>
                 {{#each perm in Pcs.aclsController.cur_role.permissions}}
                 <tr {{bind-attr acl_perm_id="perm.permission_id"}}>
-                    <td>{{perm.type}}</td>
-                    <td>{{perm.xpath_id}}</td>
-                    <td>{{perm.query_id}}</td>
-                    <td style="text-align:center;">
-                      <a onclick="x=$(this);remove_acl_item($(this).closest('tr'),'perm');return false;" href="#" class="remove">X</a>
-                    </td>
-                  </tr>
+                  <td>{{perm.type}}</td>
+                  <td>{{perm.xpath_id}}</td>
+                  <td>{{perm.query_id}}</td>
+                  <td style="text-align:center;">
+                    <a onclick="x=$(this);remove_acl_item($(this).closest('tr'),'perm');return false;" href="#" class="remove">X</a>
+                  </td>
+                </tr>
               {{/each}}
               {{#unless Pcs.aclsController}}
                 <tr><td style="color: gray;">NONE</td><td></td><td></td></tr>
               {{/unless}}
               <tr id="new_acl_perm">
-                <td><select name="role_type"><option>read</option><option>write</option><option>deny</option></select></td>
-                <td><select name="role_xpath_id"><option>XPath</option><option>ID</option></td>
+                <td>
+                  <select name="role_type">
+                    <option value="read">Read</option>
+                    <option value="write">Write</option>
+                    <option value="deny">Deny</option>
+                  </select>
+                </td>
+                <td>
+                  <select name="role_xpath_id">
+                    <option value="xpath">XPath</option>
+                    <option value="id">ID</option>
+                  </select>
+                </td>
                 <td><input type="text" name="role_query_id"></td>
                 <td><button type="button" onclick="add_acl_item('#new_acl_perm', 'perm');" name="add">Add</button></td>
               </tr>
@@ -158,8 +169,5 @@
       </tr>
     </table>
   </div>
-  <div id="remove_acl_roles" style="display:none;">
-    <p style="font-size:12px;">Are you sure you want to remove the following ACL role(s)?</p>
-    <span id="roles_to_remove"></span>
-  </div>
+  <%= erb :_dialogs %>
 </td></td>

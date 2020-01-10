@@ -1,7 +1,11 @@
-require 'pp'
+require 'pathname'
 
-def getResourcesGroups(get_fence_devices = false, get_all_options = false)
-  stdout, stderror, retval = run_cmd("crm_mon", "--one-shot", "-r", "--as-xml")
+def getResourcesGroups(session, get_fence_devices = false, get_all_options = false,
+  get_operations=false
+)
+  stdout, stderror, retval = run_cmd(
+    session, CRM_MON, "--one-shot", "-r", "--as-xml"
+  )
   if retval != 0
     return [],[], retval
   end
@@ -31,7 +35,7 @@ def getResourcesGroups(get_fence_devices = false, get_all_options = false)
     else
       ms = false
       if e.parent.attributes["multi_state"] == "true"
-      	ms = true
+        ms = true
       end
       !get_fence_devices && resource_list.push(Resource.new(e, nil, !ms, ms))
     end
@@ -42,7 +46,7 @@ def getResourcesGroups(get_fence_devices = false, get_all_options = false)
     else
       ms = false
       if e.parent.parent.attributes["multi_state"] == "true"
-      	ms = true
+        ms = true
       end
       !get_fence_devices && resource_list.push(Resource.new(e,e.parent.parent.attributes["id"] + "/" + e.parent.attributes["id"],!ms, ms))
     end
@@ -52,43 +56,59 @@ def getResourcesGroups(get_fence_devices = false, get_all_options = false)
     group_list.push(e.attributes["id"])
   end
 
+  resource_list = resource_list.select { |x| not x.orphaned }
   resource_list = resource_list.sort_by{|a| (a.group ? "1" : "0").to_s + a.group.to_s + "-" +  a.id}
 
-  if get_all_options
-    stdout, stderror, retval = run_cmd("cibadmin", "-Q", "-l")
+  if get_all_options or get_operations
+    stdout, stderror, retval = run_cmd(session, "cibadmin", "-Q", "-l")
     cib_output = stdout
     resources_inst_attr_map = {}
     resources_meta_attr_map = {}
+    resources_operation_map = {}
     begin
       doc = REXML::Document.new(cib_output.join("\n"))
-
-      doc.elements.each('//primitive') do |r|
-	resources_inst_attr_map[r.attributes["id"]] = {}
-	resources_meta_attr_map[r.attributes["id"]] = {}
-	r.each_recursive do |ia|
-	  if ia.node_type == :element and ia.name == "nvpair"
-	    if ia.parent.name == "instance_attributes"
-	      resources_inst_attr_map[r.attributes["id"]][ia.attributes["name"]] = ia.attributes["value"]
-	    elsif ia.parent.name == "meta_attributes"
-	      resources_meta_attr_map[r.attributes["id"]][ia.attributes["name"]] = [ia.attributes["id"],ia.attributes["value"],ia.parent.parent.attributes["id"]]
-	    end
-	  end
-	  if ["group","clone","master"].include?(r.parent.name)
-	    r.parent.elements.each('./meta_attributes/nvpair') do |ma|
-	      resources_meta_attr_map[r.attributes["id"]][ma.attributes["name"]] ||= []
-	      resources_meta_attr_map[r.attributes["id"]][ma.attributes["name"]] = [ma.attributes["id"],ma.attributes["value"],ma.parent.parent.attributes["id"]]
+      if get_all_options
+        doc.elements.each('//primitive') do |r|
+          resources_inst_attr_map[r.attributes["id"]] = {}
+          resources_meta_attr_map[r.attributes["id"]] = {}
+          r.each_recursive do |ia|
+            if ia.node_type == :element and ia.name == "nvpair"
+              if ia.parent.name == "instance_attributes"
+                resources_inst_attr_map[r.attributes["id"]][ia.attributes["name"]] = ia.attributes["value"]
+              elsif ia.parent.name == "meta_attributes"
+                resources_meta_attr_map[r.attributes["id"]][ia.attributes["name"]] = [ia.attributes["id"],ia.attributes["value"],ia.parent.parent.attributes["id"]]
+              end
+            end
+            if ["group","clone","master"].include?(r.parent.name)
+              r.parent.elements.each('./meta_attributes/nvpair') do |ma|
+                resources_meta_attr_map[r.attributes["id"]][ma.attributes["name"]] ||= []
+                resources_meta_attr_map[r.attributes["id"]][ma.attributes["name"]] = [ma.attributes["id"],ma.attributes["value"],ma.parent.parent.attributes["id"]]
+              end
             end
           end
-
-	end
-
+        end
+        resource_list.each {|r|
+          r.options = resources_inst_attr_map[r.id]
+          r.instance_attr = resources_inst_attr_map[r.id]
+          r.meta_attr = resources_meta_attr_map[r.id]
+        }
       end
 
-      resource_list.each {|r|
-	r.options = resources_inst_attr_map[r.id]
-	r.instance_attr = resources_inst_attr_map[r.id]
-	r.meta_attr = resources_meta_attr_map[r.id]
-      }
+      if get_operations
+        doc.elements.each('//lrm_rsc_op') { |rsc_op|
+          resources_operation_map[rsc_op.parent.attributes['id']] ||= []
+          resources_operation_map[rsc_op.parent.attributes['id']] << (
+            ResourceOperation.new(rsc_op)
+          )
+        }
+        resource_list.each {|r|
+          if resources_operation_map[r.id]
+            r.operations = resources_operation_map[r.id].sort { |a, b|
+              a.call_id <=> b.call_id
+            }
+          end
+        }
+      end
     rescue REXML::ParseException
       $logger.info("ERROR: Parse Exception parsing cibadmin -Q")
     end
@@ -97,38 +117,11 @@ def getResourcesGroups(get_fence_devices = false, get_all_options = false)
   [resource_list, group_list, 0]
 end
 
-def getResourceOptions(resource_id,stonith=false)
-  # Strip ':' from resource name (for clones & master/slave)
-  resource_id = resource_id.sub(/(.*):.*/,'\1')
-
-  ret = {}
-  if stonith
-    resource_options = `#{PCS} stonith show #{resource_id}`
-  else
-    resource_options = `#{PCS} resource show #{resource_id}`
-  end
-  resource_options.each_line { |line|
-    keyval = line.strip.split(/: /,2)
-    if keyval[0] == "Attributes" then
-      options = keyval[1].split(/ /)
-      options.each {|opt|
-      	kv = opt.split(/=/)
-      	ret[kv[0]] = kv[1]
-      }
-    end
-  }
-  return ret
-end
-
-def getAllConstraints()
-  stdout, stderror, retval = run_cmd("cibadmin", "-Q", "-l", "--xpath", "//constraints")
+def getAllConstraints(constraints_dom)
   constraints = {}
-  if retval != 0
-    return {}
-  end
-  doc = REXML::Document.new(stdout.join("\n"))
-  constraints = {}
-  doc.elements.each('constraints/*') do |e|
+  doc = constraints_dom
+
+  doc.elements.each() { |e|
     if e.name == 'rsc_location' and e.has_elements?()
       rule_export = RuleToExpression.new()
       e.elements.each('rule') { |rule|
@@ -170,123 +163,49 @@ def getAllConstraints()
         constraints[e.name] = [e.attributes]
       end
     end
-  end
+  }
   return constraints
 end
 
-# Returns two arrays, one that lists resources that start before
-# one that lists resources that start after
-def getOrderingConstraints(resource_id)
-  ordering_constraints = `#{PCS} constraint order show all`
-  before = []
-  after = []
-  ordering_constraints.each_line { |line|
-    if line.start_with?("Ordering Constraints:")
-      next
-    end
-    line.strip!
-    sline = line.split(/ /,6)
-    if (sline[0] == resource_id)
-      after << [sline[-1].to_s[4..-2],sline[2]]
-    end
-    if (sline[2] == resource_id)
-      before << [sline[-1].to_s[4..-2],sline[0]]
-    end
-  }
-  return before,after
-end
-
-# Returns two arrays, one that lists nodes that can run resource
-# one that lists nodes that cannot
-def getLocationConstraints(resource_id)
-  location_constraints = `#{PCS} constraint location show all`
-  enabled_nodes = {}
-  disabled_nodes = {}
-  inResource = false
-  location_constraints.each_line { |line|
-    line.strip!
-    next if line.start_with?("Location Constraints:")
-    if line.start_with?("Resource:")
-      if line == "Resource: " + resource_id
-	inResource = true
-      else
-	inResource = false
-      end
-      next
-    end
-    next if !inResource
-    if line.start_with?("Enabled on:")
-      prev = nil
-      line.split(/: /,2)[1].split(/ /).each { |n|
-	if n.start_with?("(id:")
-	  enabled_nodes[prev][0] = n[4..-2]
-	elsif n.start_with?("(")
-	  enabled_nodes[prev][1] = n[1..-2]
-	else
-	  enabled_nodes[n] = []
-	  prev = n
-	end
-      }
-    end
-    if line.start_with?("Disabled on:")
-      prev = nil
-      line.split(/: /,2)[1].split(/ /).each { |n|
-	if n.start_with?("(id:")
-	  disabled_nodes[prev][0] = n[4..-2]
-	elsif n.start_with?("(")
-	  disabled_nodes[prev][1] = n[1..-2]
-	else
-	  disabled_nodes[n] = []
-	  prev = n
-	end
-      }
-    end
-  }
-  return enabled_nodes,disabled_nodes
-end
-
-# Returns two arrays, one that lists resources that should be together
-# one that lists resources that should be apart
-def getColocationConstraints(resource_id)
-  colocation_constraints = `#{PCS} constraint colocation show all`
-  together = []
-  apart = []
-  colocation_constraints.each_line { |line|
-    if line.start_with?("Colocation Constraints:")
-      next
-    end
-    line.strip!
-    sline = line.split(/ /,5)
-    score = []
-    score[0] = sline[4][4..-2]
-    score[1] = sline[3][1..-2]
-    if (sline[0] == resource_id)
-      if score[1] == "INFINITY"  or (score[1] != "-INFINITY" and score[1].to_i >= 0)
-	together << [sline[2],score]
-      else
-	apart << [sline[2],score]
-      end
-    end
-
-    if (sline[2] == resource_id)
-      if score[1] == "INFINITY"  or (score[1] != "-INFINITY" and score[1].to_i >= 0)
-	together << [sline[0],score]
-      else
-	apart << [sline[0],score]
-      end
-    end
-  }
-  return together,apart
-end
-
-def getResourceMetadata(resourcepath)
-  ENV['OCF_ROOT'] = OCF_ROOT
-  metadata = `#{resourcepath} meta-data`
-  doc = REXML::Document.new(metadata)
+def getResourceMetadata(session, resourcepath)
   options_required = {}
   options_optional = {}
   long_desc = ""
   short_desc = ""
+
+  resourcepath = Pathname.new(resourcepath).cleanpath.to_s
+  resource_dirs = [
+    HEARTBEAT_AGENTS_DIR, PACEMAKER_AGENTS_DIR, NAGIOS_METADATA_DIR,
+  ]
+  if not resource_dirs.any? { |allowed| resourcepath.start_with?(allowed) }
+    $logger.error(
+      "Unable to get metadata of resource agent '#{resourcepath}': " +
+      'path not allowed'
+    )
+    return [options_required, options_optional, [short_desc, long_desc]]
+  end
+
+  if resourcepath.end_with?('.xml')
+    begin
+      metadata = IO.read(resourcepath)
+    rescue
+      metadata = ""
+    end
+  else
+    ENV['OCF_ROOT'] = OCF_ROOT
+    stdout, stderr, retval = run_cmd(session, resourcepath, 'meta-data')
+    metadata = stdout.join
+  end
+
+  begin
+    doc = REXML::Document.new(metadata)
+  rescue REXML::ParseException => e
+    $logger.error(
+      "Unable to parse metadata of resource agent '#{resourcepath}': #{e}"
+    )
+    return [options_required, options_optional, [short_desc, long_desc]]
+  end
+
   doc.elements.each('resource-agent/longdesc') {|ld|
     long_desc = ld.text ? ld.text.strip : ld.text
   }
@@ -298,62 +217,52 @@ def getResourceMetadata(resourcepath)
     temp_array = []
     if param.attributes["required"] == "1"
       if param.elements["shortdesc"] and param.elements["shortdesc"].text
-	temp_array << param.elements["shortdesc"].text.strip
+        temp_array << param.elements["shortdesc"].text.strip
       else
-      	temp_array << ""
+        temp_array << ""
       end
       if param.elements["longdesc"] and param.elements["longdesc"].text
-	temp_array << param.elements["longdesc"].text.strip
+        temp_array << param.elements["longdesc"].text.strip
       else
-      	temp_array << ""
+        temp_array << ""
       end
       options_required[param.attributes["name"]] = temp_array
     else
       if param.elements["shortdesc"] and param.elements["shortdesc"].text
-	temp_array << param.elements["shortdesc"].text.strip
+        temp_array << param.elements["shortdesc"].text.strip
       else
-      	temp_array << ""
+        temp_array << ""
       end
       if param.elements["longdesc"] and param.elements["longdesc"].text
-	temp_array << param.elements["longdesc"].text.strip
+        temp_array << param.elements["longdesc"].text.strip
       else
-      	temp_array << ""
+        temp_array << ""
       end
       options_optional[param.attributes["name"]] = temp_array
     end
   }
-  [options_required, options_optional, [short_desc,long_desc]]
+  [options_required, options_optional, [short_desc, long_desc]]
 end
 
-def getResourceAgents(resource_agent = nil)
+def getResourceAgents(session)
   resource_agent_list = {}
-  stdout, stderr, retval = run_cmd(PCS, "resource", "list", "--nodesc")
+  stdout, stderr, retval = run_cmd(session, PCS, "resource", "list", "--nodesc")
   if retval != 0
-    logger.error("Error running 'pcs resource list --nodesc")
-    logger.error(stdout + stderr)
+    $logger.error("Error running 'pcs resource list --nodesc")
+    $logger.error(stdout + stderr)
     return {}
   end
 
   agents = stdout
-
   agents.each { |a|
     ra = ResourceAgent.new
     ra.name = a.chomp
-
-    if resource_agent and (a.start_with?("ocf:heartbeat:") or a.start_with?("ocf:pacemaker:"))
-      split_agent = ra.name.split(/:/)
-      path = OCF_ROOT + '/resource.d/' + split_agent[1] + "/" + split_agent[2]
-      required_options, optional_options, resource_info = getResourceMetadata(path)
-      ra.required_options = required_options
-      ra.optional_options = optional_options
-      ra.info = resource_info
-    end
     resource_agent_list[ra.name] = ra
   }
-  resource_agent_list
+  return resource_agent_list
 end
 
-class Resource 
+class Resource
   attr_accessor :id, :name, :type, :agent, :agentname, :role, :active,
     :orphaned, :managed, :failed, :failure_ignored, :nodes, :location,
     :options, :group, :clone, :stonith, :ms, :operations,
@@ -365,7 +274,7 @@ class Resource
     @active = e.attributes["active"] == "true" ? true : false
     @orphaned = e.attributes["orphaned"] == "true" ? true : false
     @failed = e.attributes["failed"] == "true" ? true : false
-    @active = e.attributes["active"] == "true" ? true : false
+    @role = e.attributes['role']
     @nodes = []
     # Strip ':' from group name (for clones & master/slave created from a group)
     @group = group ? group.sub(/(.*):.*/, '\1') : group
@@ -377,7 +286,7 @@ class Resource
     @options = {}
     @instance_attr = {}
     @meta_attr = {}
-    @operations = {}
+    @operations = []
     e.elements.each do |n| 
       node = Node.new
       node.name = n.attributes["name"]
@@ -395,13 +304,15 @@ class Resource
   end
 
   def disabled
-    if meta_attr and meta_attr["target-role"] and meta_attr["target-role"] == "Stopped"
+    return false if @stonith
+    if meta_attr and meta_attr["target-role"] and meta_attr["target-role"][1] == "Stopped"
       return true
     else
       return false
     end
   end
 end
+
 
 class ResourceAgent
   attr_accessor :name, :resource_class, :required_options, :optional_options, :info
@@ -447,8 +358,50 @@ class ResourceAgent
   end
 end
 
-class RuleToExpression
 
+class ResourceOperation
+  attr_accessor :call_id, :crm_debug_origin, :crm_feature_set, :exec_time,
+    :exit_reason, :id, :interval, :last_rc_change, :last_run, :on_node,
+    :op_digest, :operation, :operation_key, :op_force_restart,
+    :op_restart_digest, :op_status, :queue_time, :rc_code, :transition_key,
+    :transition_magic
+  def initialize(op_element)
+    @call_id = op_element.attributes['call-id'].to_i
+    @crm_debug_origin = op_element.attributes['crm-debug-origin']
+    @crm_feature_set = op_element.attributes['crm_feature_set']
+    @exec_time = op_element.attributes['exec-time'].to_i
+    @exit_reason = op_element.attributes['exit-reason']
+    @id = op_element.attributes['id']
+    @interval = op_element.attributes['interval'].to_i
+    @last_rc_change = op_element.attributes['last-rc-change'].to_i
+    @last_run = op_element.attributes['last-run'].to_i
+    @on_node = op_element.attributes['on_node']
+    @op_digest = op_element.attributes['op-digest']
+    @operation_key = op_element.attributes['operation_key']
+    @operation = op_element.attributes['operation']
+    @op_force_restart = op_element.attributes['op-force-restart']
+    @op_restart_digest = op_element.attributes['op-restart-digest']
+    @op_status = op_element.attributes['op-status'].to_i
+    @queue_time = op_element.attributes['queue-time'].to_i
+    @rc_code = op_element.attributes['rc-code'].to_i
+    @transition_key = op_element.attributes['transition-key']
+    @transition_magic = op_element.attributes['transition-magic']
+
+    if not @on_node
+      elem = op_element.parent
+      while elem
+        if elem.name == 'node_state'
+          @on_node = elem.attributes['uname']
+          break
+        end
+        elem = elem.parent
+      end
+    end
+  end
+end
+
+
+class RuleToExpression
   def export(rule)
     boolean_op = 'and'
     if rule.attributes.key?('boolean-op')
@@ -523,5 +476,4 @@ class RuleToExpression
     end
     return part_list.join(' ')
   end
-
 end

@@ -1,4 +1,10 @@
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+from __future__ import unicode_literals
+
 import re
+
 
 examples = ""
 def full_usage():
@@ -13,8 +19,9 @@ def full_usage():
     out += strip_extras(acl([],False))
     out += strip_extras(status([],False))
     out += strip_extras(config([],False))
-    print out.strip()
-    print "Examples:\n" + examples.replace(" \ ","")
+    out += strip_extras(pcsd([],False))
+    print(out.strip())
+    print("Examples:\n" + examples.replace(" \ ",""))
 
 def strip_extras(text):
     global examples
@@ -88,7 +95,7 @@ def sub_usage(args, output):
 def dict_depth(d, depth=0):
     if not isinstance(d, dict) or not d:
         return depth
-    return max(dict_depth(v, depth+1) for k, v in d.iteritems())
+    return max(dict_depth(v, depth+1) for k, v in d.items())
 
 def sub_gen_code(level,item,prev_level=[],spaces=""):
     out = ""
@@ -130,7 +137,9 @@ def sub_generate_bash_completion():
     tree["constraint"] = generate_tree(constraint([],False))
     tree["status"] = generate_tree(status([],False))
     tree["config"] = generate_tree(config([],False))
-    print """
+    tree["pcsd"] = generate_tree(pcsd([],False))
+    tree["node"] = generate_tree(node([], False))
+    print("""
     _pcs()
     {
     local cur cur1 cur2 cur3
@@ -140,19 +149,19 @@ def sub_generate_bash_completion():
     if [ "$COMP_CWORD" -gt "1" ]; then cur2="${COMP_WORDS[COMP_CWORD-2]}";fi
     if [ "$COMP_CWORD" -gt "2" ]; then cur3="${COMP_WORDS[COMP_CWORD-3]}";fi
 
-    """
-    print sub_gen_code(3,tree,[])
-    print sub_gen_code(2,tree,[])
-    print sub_gen_code(1,tree,[])
-    print """
+    """)
+    print(sub_gen_code(3,tree,[]))
+    print(sub_gen_code(2,tree,[]))
+    print(sub_gen_code(1,tree,[]))
+    print("""
     if [ $COMP_CWORD -eq 1 ]; then
-        COMPREPLY=( $(compgen -W "resource cluster stonith property acl constraint status config" -- $cur) )
+        COMPREPLY=( $(compgen -W "resource cluster stonith property acl constraint status config pcsd node" -- $cur) )
     fi
     return 0
 
     }
     complete -F _pcs pcs
-    """
+    """)
 
 
 def generate_tree(usage_txt):
@@ -169,7 +178,7 @@ def generate_tree(usage_txt):
 
         if ignore == True:
             continue
-        
+
         if re.match("^    \w",l):
             args = l.split()
             arg = args.pop(0)
@@ -204,11 +213,13 @@ Commands:
     acl         Set pacemaker access control lists
     status      View cluster status
     config      View and manage cluster configuration
+    pcsd        Manage pcs daemon
+    node        Manage cluster nodes
 """
 # Advanced usage to possibly add later
 #  --corosync_conf=<corosync file> Specify alternative corosync.conf file
     if pout:
-        print output
+        print(output)
     else:
         return output
                                                     
@@ -247,15 +258,15 @@ Commands:
         resource relatively to some resource already existing in the group.
         If --disabled is specified the resource is not started automatically.
         If --wait is specified, pcs will wait up to 'n' seconds for the resource
-        to start and then return 0 if the resource is started, or 1 if the
-        resource has not yet started. If 'n' is not specified, default resource
-        timeout will be used.
-        Example: pcs resource create VirtualIP ocf:heartbeat:IPaddr2 \\
-                     ip=192.168.0.99 cidr_netmask=32 op monitor interval=30s \\
-                     nic=eth2
-                 Create a new resource called 'VirtualIP' with IP address
-                 192.168.0.99, netmask of 32, monitored everything 30 seconds,
-                 on eth2.
+        to start and then return 0 if the resource is started, or 1 if
+        the resource has not yet started.  If 'n' is not specified it defaults
+        to 60 minutes.
+        Example: Create a new resource called 'VirtualIP' with IP address
+            192.168.0.99, netmask of 32, monitored everything 30 seconds,
+            on eth2.
+            pcs resource create VirtualIP ocf:heartbeat:IPaddr2 \\
+                ip=192.168.0.99 cidr_netmask=32 nic=eth2 \\
+                op monitor interval=30s
 
     delete <resource id|group id|master id|clone id>
         Deletes the resource, group, master or clone (and all resources within
@@ -265,16 +276,18 @@ Commands:
         Allow the cluster to start the resource. Depending on the rest of the
         configuration (constraints, options, failures, etc), the resource may
         remain stopped.  If --wait is specified, pcs will wait up to 'n' seconds
-        (or resource timeout seconds) for the resource to start and then return
-        0 if the resource is started, or 1 if the resource has not yet started.
+        for the resource to start and then return 0 if the resource is started,
+        or 1 if the resource has not yet started.  If 'n' is not specified it
+        defaults to 60 minutes.
 
     disable <resource id> [--wait[=n]]
         Attempt to stop the resource if it is running and forbid the cluster
         from starting it again.  Depending on the rest of the configuration
         (constraints, options, failures, etc), the resource may remain
-        started.  If --wait is specified, pcs will wait up to 'n' seconds (or
-        resource timeout seconds) for the resource to stop and then return 0
-        if the resource is stopped or 1 if the resource has not stopped.
+        started.  If --wait is specified, pcs will wait up to 'n' seconds for
+        the resource to stop and then return 0 if the resource is stopped or 1
+        if the resource has not stopped.  If 'n' is not specified it defaults
+        to 60 minutes.
 
     restart <resource id> [node] [--wait=n]
         Restart the resource specified. If a node is specified and if the
@@ -289,38 +302,71 @@ Commands:
         starting the resource.  Using --full will give more detailed output.
         This is mainly used for debugging resources that fail to start.
 
+    debug-stop <resource id> [--full]
+        This command will force the specified resource to stop on this node
+        ignoring the cluster recommendations and print the output from
+        stopping the resource.  Using --full will give more detailed output.
+        This is mainly used for debugging resources that fail to stop.
+
+    debug-promote <resource id> [--full]
+        This command will force the specified resource to be promoted on this
+        node ignoring the cluster recommendations and print the output from
+        promoting the resource.  Using --full will give more detailed output.
+        This is mainly used for debugging resources that fail to promote.
+
+    debug-demote <resource id> [--full]
+        This command will force the specified resource to be demoted on this
+        node ignoring the cluster recommendations and print the output from
+        demoting the resource.  Using --full will give more detailed output.
+        This is mainly used for debugging resources that fail to demote.
+
+    debug-monitor <resource id> [--full]
+        This command will force the specified resource to be moniored on this
+        node  ignoring the cluster recommendations and print the output from
+        monitoring the resource.  Using --full will give more detailed output.
+        This is mainly used for debugging resources that fail to be monitored.
+
     move <resource id> [destination node] [--master] [lifetime=<lifetime>]
          [--wait[=n]]
-        Move resource off current node (and optionally onto destination node).
-        If --master is used the scope of the command is limited to the master
-        role and you must use the master id (instead of the resource id).
-        If lifetime is not specified it defaults to infinite.  If --wait is
-        specified, pcs will wait up to 'n' seconds for the resource to start
-        on destination node and then return 0 if the resource is started, or 1
-        if the resource has not yet started.  If 'n' is not specified, default
-        resource timeout will be used.
+        Move the resource off the node it is currently running on by creating a
+        -INFINITY location constraint to ban the node.  If destination node is
+        specified the resource will be moved to that node by creating an
+        INFINITY location constraint to prefer the destination node.  If
+        --master is used the scope of the command is limited to the master role
+        and you must use the master id (instead of the resource id).  If
+        lifetime is specified then the constraint will expire after that time,
+        otherwise it defaults to infinity and the constraint can be cleared
+        manually with 'pcs resource clear' or 'pcs constraint delete'.  If
+        --wait is specified, pcs will wait up to 'n' seconds for the resource
+        to move and then return 0 on success or 1 on error.  If 'n' is not
+        specified it defaults to 60 minutes.
+        If you want the resource to preferably avoid running on some nodes but
+        be able to failover to them use 'pcs location avoids'.
 
     ban <resource id> [node] [--master] [lifetime=<lifetime>] [--wait[=n]]
         Prevent the resource id specified from running on the node (or on the
-        current node it is running on if no node is specified).
-        If --master is used the scope of the command is limited to the
-        master role and you must use the master id (instead of the resource id).
-        If lifetime is not specified it defaults to infinite.  If --wait is
-        specified, pcs will wait up to 'n' seconds for the resource to start
-        on different node and then return 0 if the resource is started, or 1
-        if the resource has not yet started.  If 'n' is not specified, default
-        resource timeout will be used.
+        current node it is running on if no node is specified) by creating a
+        -INFINITY location constraint.  If --master is used the scope of the
+        command is limited to the master role and you must use the master id
+        (instead of the resource id).  If lifetime is specified then the
+        constraint will expire after that time, otherwise it defaults to
+        infinity and the constraint can be cleared manually with 'pcs resource
+        clear' or 'pcs constraint delete'.  If --wait is specified, pcs will
+        wait up to 'n' seconds for the resource to move and then return 0
+        on success or 1 on error. If 'n' is not specified it defaults to 60
+        minutes.
+        If you want the resource to preferably avoid running on some nodes but
+        be able to failover to them use 'pcs location avoids'.
 
-    clear <resource id> [node] [--master] [--wait=n]
+    clear <resource id> [node] [--master] [--wait[=n]]
         Remove constraints created by move and/or ban on the specified
         resource (and node if specified).
         If --master is used the scope of the command is limited to the
         master role and you must use the master id (instead of the resource id).
-        If --wait is specified, pcs will wait up to 'n' seconds for resources
-        to start / move depending on the effect of removing the constraints and
-        then return 0 if resources are started on target nodes, or 1 if
-        resources have not yet started / moved.  If clear has no effect, pcs
-        will return 0.
+        If --wait is specified, pcs will wait up to 'n' seconds for the
+        operation to finish (including starting and/or moving resources if
+        appropriate) and then return 0 on success or 1 on error.  If 'n' is not
+        specified it defaults to 60 minutes.
 
     standards
         List available resource agent standards supported by this installation.
@@ -338,13 +384,12 @@ Commands:
         resource.  If an operation (op) is specified it will update the first
         found operation with the same action on the specified resource, if no
         operation with that action exists then a new operation will be created.
-        (WARNING: all current options on the update op will be reset if not
-        specified) If you want to create multiple monitor operations you should
-        use the add_operation & remove_operation commands.  If --wait is
+        (WARNING: all existing options on the updated operation will be reset
+        if not specified.)  If you want to create multiple monitor operations
+        you should use the 'op add' & 'op remove' commands.  If --wait is
         specified, pcs will wait up to 'n' seconds for the changes to take
         effect and then return 0 if the changes have been processed or 1
-        otherwise.  If 'n' is not specified, default resource timeout will
-        be used.
+        otherwise.  If 'n' is not specified it defaults to 60 minutes.
 
     op add <resource id> <operation action> [operation properties]
         Add operation for specified resource
@@ -367,8 +412,7 @@ Commands:
         may be removed by setting an option without a value.  If --wait is
         specified, pcs will wait up to 'n' seconds for the changes to take
         effect and then return 0 if the changes have been processed or 1
-        otherwise.  If 'n' is not specified, default resource timeout will
-        be used.
+        otherwise.  If 'n' is not specified it defaults to 60 minutes.
         Example: pcs resource meta TestResource failure-timeout=50 stickiness=
 
     group add <group name> <resource id> [resource id] ... [resource id]
@@ -378,51 +422,47 @@ Commands:
         to the new group.  You can use --before or --after to specify
         the position of the added resources relatively to some resource already
         existing in the group.  If --wait is specified, pcs will wait up to 'n'
-        seconds for resources to move depending on the effect of grouping and
-        then return 0 if the resources are moved, or 1 if the resources have not
-        yet moved.  If 'n' is not specified, default resource timeout will
-        be used.
+        seconds for the operation to finish (including moving resources if
+        appropriate) and then return 0 on success or 1 on error.  If 'n' is not
+        specified it defaults to 60 minutes.
 
     group remove <group name> <resource id> [resource id] ... [resource id]
           [--wait[=n]]
         Remove the specified resource(s) from the group, removing the group if
         it no resources remain.  If --wait is specified, pcs will wait up to 'n'
-        seconds for specified resources to move depending of the effect
-        of ungrouping and the return 0 if resources are moved to target nodes,
-        or 1 if resources have not yet moved.  If 'n' is not specified, default
-        resource timeout will be used.
+        seconds for the operation to finish (including moving resources if
+        appropriate) and then return 0 on success or 1 on error.  If 'n' is not
+        specified it defaults to 60 minutes.
 
     ungroup <group name> [resource id] ... [resource id] [--wait[=n]]
         Remove the group (Note: this does not remove any resources from the
         cluster) or if resources are specified, remove the specified resources
         from the group.  If --wait is specified, pcs will wait up to 'n' seconds
-        for specified resources (all group resources if no resource specified)
-        to move depending of the effect of ungrouping and the return 0 if
-        resources are moved to target nodes, or 1 if resources have not yet
-        moved.  If 'n' is not specified, default resource timeout will be used.
+        for the operation to finish (including moving resources if appropriate)
+        and the return 0 on success or 1 on error.  If 'n' is not specified it
+        defaults to 60 minutes.
 
     clone <resource id | group id> [clone options]... [--wait[=n]]
         Setup up the specified resource or group as a clone.  If --wait is
-        specified, pcs will wait up to 'n' seconds for the resource clones
-        to start and then return 0 if the clones are started, or 1 if
-        the clones has not yet started.  If 'n' is not specified, default
-        resource timeout will be used.
+        specified, pcs will wait up to 'n' seconds for the operation to finish
+        (including starting clone instances if appropriate) and then return 0
+        on success or 1 on error.  If 'n' is not specified it defaults to 60
+        minutes.
 
     unclone <resource id | group name> [--wait[=n]]
         Remove the clone which contains the specified group or resource (the
         resource or group will not be removed).  If --wait is specified, pcs
-        will wait up to 'n' seconds for the resource clones to stop and then
-        return 0 if the resource is running as one instance, or 1 if
-        the resource clones has not yet stopped.  If 'n' is not specified,
-        default resource timeout will be used.
+        will wait up to 'n' seconds for the operation to finish (including
+        stopping clone instances if appropriate) and then return 0 on success
+        or 1 on error.  If 'n' is not specified it defaults to 60 minutes.
 
     master [<master/slave name>] <resource id | group name> [options]
            [--wait[=n]]
         Configure a resource or group as a multi-state (master/slave) resource.
-        If --wait is specified, pcs will wait up to 'n' seconds for the resource
-        to be promoted and then return 0 if the resource is promoted, or 1 if
-        the resource has not yet been promoted.  If 'n' is not specified,
-        default resource timeout will be used.
+        If --wait is specified, pcs will wait up to 'n' seconds for the operation
+        to finish (including starting and promoting resource instances if
+        appropriate) and then return 0 on success or 1 on error.  If 'n' is not
+        specified it defaults to 60 minutes.
         Note: to remove a master you must remove the resource/group it contains.
 
     manage <resource id> ... [resource n]
@@ -452,6 +492,35 @@ Commands:
         specified node.  This tells the cluster to forget how many times
         a resource has failed in the past.  This may allow the resource to
         be started or moved to a more preferred location.
+
+    relocate dry-run [resource1] [resource2] ...
+        The same as 'relocate run' but has no effect on the cluster.
+
+    relocate run [resource1] [resource2] ...
+        Relocate specified resources to their preferred nodes.  If no resources
+        are specified, relocate all resources.
+        This command calculates the preferred node for each resource while
+        ignoring resource stickiness.  Then it creates location constraints
+        which will cause the resources to move to their preferred nodes.  Once
+        the resources have been moved the constraints are deleted automatically.
+        Note that the preferred node is calculated based on current cluster
+        status, constraints, location of resources and other settings and thus
+        it might change over time.
+
+    relocate show
+        Display current status of resources and their optimal node ignoring
+        resource stickiness.
+
+    relocate clear
+        Remove all constraints created by the 'relocate run' command.
+
+    utilization [<resource id> [<name>=<value> ...]]
+        Add specified utilization options to specified resource. If resource is
+        not specified, shows utilization of all resources. If utilization
+        options are not specified, shows utilization of specified resource.
+        Utilization option should be in format name=value, value has to be
+        integer. Options may be removed by setting an option without a value.
+        Example: pcs resource utilization TestResource cpu= ram=20
 
 Examples:
 
@@ -487,7 +556,7 @@ Notes:
 
 """
     if pout:
-        print sub_usage(args, output)
+        print(sub_usage(args, output))
     else:
         return output
 
@@ -517,14 +586,15 @@ Commands:
             [--ipv6] [--token <timeout>] [--token_coefficient <timeout>]
             [--join <timeout>] [--consensus <timeout>] [--miss_count_const <count>]
             [--fail_recv_const <failures>]
-        Configure corosync and sync configuration out to listed nodes
-        --local will only perform changes on the local node
-        --start will also start the cluster on the specified nodes
-        --enable will enable corosync and pacemaker on node startup
-        --transport allows specification of corosync transport (default: udpu)
+        Configure corosync and sync configuration out to listed nodes.
+        --local will only perform changes on the local node,
+        --start will also start the cluster on the specified nodes,
+        --enable will enable corosync and pacemaker on node startup,
+        --transport allows specification of corosync transport (default: udpu;
+            udp for CMAN clusters),
         --rrpmode allows you to set the RRP mode of the system. Currently only
             'passive' is supported or tested (using 'active' is not
-            recommended)
+            recommended).
         The --wait_for_all, --auto_tie_breaker, --last_man_standing,
         --last_man_standing_window options are all documented in corosync's
         votequorum(5) man page.
@@ -548,8 +618,8 @@ Commands:
 
         Configuring Redundant Ring Protocol (RRP)
 
-        When using udpu (the default) specifying nodes, specify the ring 0
-        address first followed by a ',' and then the ring 1 address.
+        When using udpu specifying nodes, specify the ring 0 address first
+        followed by a ',' and then the ring 1 address.
 
         Example: pcs cluster setup --name cname nodeA-0,nodeA-1 nodeB-0,nodeB-1
 
@@ -595,7 +665,7 @@ Commands:
         be able to host resources), if no node or options are specified the
         current node will be put into standby mode, if --all is specified all
         nodes will be put into standby mode.
-    
+
     unstandby [<node>] | --all
         Remove node from standby mode (the node specified will now be able to
         host resources), if no node or options are specified the current node
@@ -605,7 +675,7 @@ Commands:
     remote-node add <hostname> <resource id> [options]
         Enables the specified resource as a remote-node resource on the
         specified hostname (hostname should be the same as 'uname -n')
-    
+
     remote-node remove <hostname>
         Disables any resources configured to be remote-node resource on the
         specified hostname (hostname should be the same as 'uname -n')
@@ -616,9 +686,6 @@ Commands:
     pcsd-status [node] [...]
         Get current status of pcsd on nodes specified, or on all nodes
         configured in corosync.conf if no nodes are specified
-
-    certkey <certificate file> <key file>
-        Load custom certificate and key files for use in pcsd
 
     sync
         Sync corosync configuration to all nodes found from current
@@ -643,15 +710,20 @@ Commands:
 
     cib-push <filename> [scope=<scope> | --config]
         Push the raw xml from <filename> to the CIB (Cluster Information Base).
+        You can obtain the CIB by running the 'pcs cluster cib' command, which
+        is recommended first step when you want to perform desired
+        modifications (pcs -f <command>) for the one-off push.
         Specify scope to push a specific section of the CIB.  Valid values
         of the scope are: configuration, nodes, resources, constraints,
         crm_config, rsc_defaults, op_defaults.  --config is the same as
         scope=configuration.  Use of --config is recommended.  Do not specify
         a scope if you need to push the whole CIB or be warned in the case
         of outdated CIB.
+        WARNING: the selected scope of the CIB will be overwritten by the
+        current content of the specified file.
 
     cib-upgrade
-        Upgrade the cib to the latest version
+        Upgrade the CIB to conform to the latest version of the document schema
 
     edit [scope=<scope> | --config]
         Edit the cib in the editor specified by the $EDITOR environment
@@ -696,8 +768,8 @@ Commands:
     destroy [--all]
         Permanently destroy the cluster on the current node, killing all
         corosync/pacemaker processes removing all cib files and the
-        corosync.conf file.  Using '--all' will attempt to destroy the
-        cluster on all nodes configure in the corosync.conf file
+        corosync.conf file.  Using --all will attempt to destroy the
+        cluster on all nodes configure in the corosync.conf file.
         WARNING: This command permantly removes any cluster configuration that
         has been created. It is recommended to run 'pcs cluster stop' before
         destroying the cluster.
@@ -705,16 +777,16 @@ Commands:
     verify [-V] [filename]
         Checks the pacemaker configuration (cib) for syntax and common
         conceptual errors.  If no filename is specified the check is
-        performmed on the currently running cluster.  If '-V' is used
+        performed on the currently running cluster.  If -V is used
         more verbose output will be printed
 
     report [--from "YYYY-M-D H:M:S" [--to "YYYY-M-D" H:M:S"]] dest
         Create a tarball containing everything needed when reporting cluster
-        problems.  If '--from' and '--to' are not used, the report will include
-        the past 24 hours
+        problems.  If --from and --to are not used, the report will include
+        the past 24 hours.
 """
     if pout:
-        print sub_usage(args, output)
+        print(sub_usage(args, output))
     else:
         return output
 
@@ -738,11 +810,13 @@ Commands:
         Show options for specified stonith agent
 
     create <stonith id> <stonith device type> [stonith device options]
+           [op <operation action> <operation options> [<operation action>
+           <operation options>]...] [meta <meta options>...]
         Create stonith device with specified type and options
 
     update <stonith id> [stonith device options]
         Add/Change options to specified stonith id
-        
+
     delete <stonith id>
         Remove stonith id from configuration
 
@@ -783,7 +857,10 @@ Commands:
         call to stonith which will turn the node off instead of rebooting it)
 
     confirm <node>
-        Confirm that the host specified is currently down
+        Confirm that the host specified is currently down.  This command
+        should ONLY be used when the node specified has already been
+        confirmed to be down.
+
         WARNING: if this node is not actually down data corruption/cluster
         failure can occur.
 
@@ -791,7 +868,7 @@ Examples:
     pcs stonith create MyStonith fence_virt pcmk_host_list=f1
 """
     if pout:
-        print sub_usage(args, output)
+        print(sub_usage(args, output))
     else:
         return output
 
@@ -802,27 +879,30 @@ Configure pacemaker properties
 
 Commands:
     list|show [<property> | --all | --defaults]
-        List property settings (default: lists configured properties)
+        List property settings (default: lists configured properties).
         If --defaults is specified will show all property defaults, if --all
         is specified, current configured properties will be shown with unset
-        properties and their defaults
+        properties and their defaults.
+        Run 'man pengine' and 'man crmd' to get a description of the properties.
 
     set [--force] [--node <nodename>] <property>=[<value>]
         Set specific pacemaker properties (if the value is blank then the
         property is removed from the configuration).  If a property is not
         recognized by pcs the property will not be created unless the
-        '--force' is used.  If --node is used a node attribute is set on
+        --force is used.  If --node is used a node attribute is set on
         the specified node.
+        Run 'man pengine' and 'man crmd' to get a description of the properties.
 
     unset [--node <nodename>] <property>
         Remove property from configuration (or remove attribute from
         specified node if --node is used).
+        Run 'man pengine' and 'man crmd' to get a description of the properties.
 
 Examples:
     pcs property set stonith-enabled=false
 """
     if pout:
-        print sub_usage(args, output)
+        print(sub_usage(args, output))
     else:
         return output
 
@@ -858,7 +938,7 @@ Commands:
           <expression> and|or <expression>
           ( <expression> )
         where duration options and date spec options are: hours, monthdays,
-        weekdays, yeardays, months, weeks, years, weekyears, moon
+        weekdays, yeardays, months, weeks, years, weekyears, moon.
         If score is omitted it defaults to INFINITY. If id is omitted one is
         generated from the resource id. If resource-discovery is omitted it
         defaults to 'always'.
@@ -868,7 +948,7 @@ Commands:
         location constraints are displayed per resource (default), if 'nodes'
         is specified location constraints are displayed per node.  If specific
         nodes or resources are specified then we only show information about
-        them
+        them.  If --full is specified show the internal constraint id's as well.
 
     location add <id> <resource name> <node> <score> [resource-discovery=<option>]
         Add a location constraint with the appropriate id, resource name,
@@ -879,7 +959,7 @@ Commands:
         node name and score. (For more advanced pacemaker usage)
 
     order show [--full]
-        List all current ordering constraints (if '--full' is specified show
+        List all current ordering constraints (if --full is specified show
         the internal constraint id's as well).
 
     order [action] <resource id> then [action] <resource id> [options]
@@ -887,7 +967,7 @@ Commands:
         demote) and if no action is specified the default action will be
         start.
         Available options are kind=Optional/Mandatory/Serialize,
-        symmetrical=true/false and id=<constraint-id>.
+        symmetrical=true/false, require-all=true/false and id=<constraint-id>.
 
     order set <resource1> <resource2> [resourceN]... [options] [set
               <resourceX> <resourceY> ... [options]]
@@ -902,7 +982,7 @@ Commands:
         Remove resource from any ordering constraint
 
     colocation show [--full]
-        List all current colocation constraints (if '--full' is specified show
+        List all current colocation constraints (if --full is specified show
         the internal constraint id's as well).
 
     colocation add [master|slave] <source resource id> with [master|slave]
@@ -911,8 +991,8 @@ Commands:
         determined <target resource> should run.  Positive values of score
         mean the resources should be run on the same node, negative values
         mean the resources should not be run on the same node.  Specifying
-        'INFINITY' (or '-INFINITY') for the score force <source resource> to
-        run (or not run) with <target resource>. (score defaults to "INFINITY")
+        'INFINITY' (or '-INFINITY') for the score forces <source resource> to
+        run (or not run) with <target resource> (score defaults to "INFINITY").
         A role can be master or slave (if no role is specified, it defaults to
         'started').
 
@@ -956,7 +1036,7 @@ Commands:
         constraint, the constraint will be removed
 """
     if pout:
-        print sub_usage(args, output)
+        print(sub_usage(args, output))
     else:
         return output
 
@@ -1016,7 +1096,7 @@ Commands:
         parenthesis after permissions in 'pcs acl' output)
 """
     if pout:
-        print sub_usage(args, output)
+        print(sub_usage(args, output))
     else:
         return output
 
@@ -1054,7 +1134,7 @@ Commands:
         View xml version of status (output from crm_mon -r -1 -X)
 """
     if pout:
-        print sub_usage(args, output)
+        print(sub_usage(args, output))
     else:
         return output
 
@@ -1096,8 +1176,78 @@ Commands:
         /etc/cluster/cluster.conf will be used.  You can force to create output
         containing either cluster.conf or corosync.conf using the output-format
         option.
+
+    import-cman output=<filename> [input=<filename>] [--interactive]
+            output-format=pcs-commands|pcs-commands-verbose
+        Converts CMAN cluster configuration to a list of pcs commands which
+        recreates the same cluster as Pacemaker cluster when executed.  Commands
+        will be saved to 'output' file.  For other options see above.
+
+    export pcs-commands|pcs-commands-verbose output=<filename>
+        Creates a list of pcs commands which upon execution recreates
+        the current cluster running on this node.  Commands will be saved
+        to 'output' file.  Use pcs-commands to get a simple list of commands,
+        whereas pcs-commands-verbose creates a list including comments and debug
+        messages.
 """
     if pout:
-        print sub_usage(args, output)
+        print(sub_usage(args, output))
+    else:
+        return output
+
+def pcsd(args=[], pout=True):
+    output = """
+Usage: pcs pcsd [commands]...
+Manage pcs daemon
+
+Commands:
+    certkey <certificate file> <key file>
+        Load custom certificate and key files for use in pcsd.
+
+    sync-certificates
+        Sync pcsd certificates to all nodes found from current corosync.conf
+        file (cluster.conf on systems running Corosync 1.x).  WARNING: This will
+        restart pcsd daemon on the nodes.
+
+    clear-auth [--local] [--remote]
+       Removes all system tokens which allow pcs/pcsd on the current system to
+       authenticate with remote pcs/pcsd instances and vice-versa.  After this
+       command is run this node will need to be re-authenticated with other
+       nodes (using 'pcs cluster auth').  Using --local only removes tokens
+       used by local pcs (and pcsd if root) to connect to other pcsd instances,
+       using --remote clears authentication tokens used by remote systems to
+       connect to the local pcsd instance.
+"""
+    if pout:
+        print(sub_usage(args, output))
+    else:
+        return output
+
+def node(args=[], pout=True):
+    output = """
+Usage: pcs node <command>
+Manage cluster nodes
+
+Commands:
+    maintenance [--all] | [node]...
+        Put specified node(s) into maintenance mode, if no node or options are
+        specified the current node will be put into maintenance mode, if --all
+        is specified all nodes will be put into maintenace mode.
+
+    unmaintenance [--all] | [node]...
+        Remove node(s) from maintenance mode, if no node or options are
+        specified the current node will be removed from maintenance mode,
+        if --all is specified all nodes will be removed from maintenance mode.
+
+    utilization [<node> [<name>=<value> ...]]
+        Add specified utilization options to specified node. If node is not
+        specified, shows utilization of all nodes. If utilization options are
+        not specified, shows utilization of specified node. Utilization option
+        should be in format name=value, value has to be integer. Options may be
+        removed by setting an option without a value.
+        Example: pcs node utilization node1 cpu=4 ram=
+"""
+    if pout:
+        print(sub_usage(args, output))
     else:
         return output
