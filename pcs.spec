@@ -1,6 +1,6 @@
 Name: pcs		
 Version: 0.9.148
-Release: 7%{?dist}
+Release: 7%{?dist}.1
 License: GPLv2
 URL: http://github.com/feist/pcs
 Group: System Environment/Base
@@ -20,6 +20,7 @@ Patch8: bz1305913-01-fix-occasional-deadlock-when-running-processes.patch
 Patch9: bz1311159-01-fix-pcsd-permissions-if-pcs_settings.conf.patch
 Patch10: bz1317812-01-add-config-settings-for-SSL-options-and-ciphers.patch
 Patch11: bz1311159-02-fix-pcsd-permissions-on-config-error.patch
+Patch12: bz1353738-01-fix-coordinated-stopping-of-nodes-in-cman-clusters.patch
 
 Source1: https://rubygems.org/downloads/backports-3.6.4.gem
 Source2: https://rubygems.org/downloads/eventmachine-1.0.7.gem
@@ -106,6 +107,8 @@ UpdateTimestamps -p1 %{PATCH9}
 UpdateTimestamps -p1 %{PATCH10}
 %patch11 -p1
 UpdateTimestamps -p1 %{PATCH11}
+%patch12 -p1
+UpdateTimestamps -p1 %{PATCH12}
 
 mkdir -p pcsd/vendor/cache
 cp -f %SOURCE1 pcsd/vendor/cache
@@ -164,6 +167,10 @@ fi
 %doc COPYING README
 
 %changelog
+* Mon Jul 18 2016 Tomas Jelinek <tojeline@redhat.com> - 0.9.148-7.el6_8.1
+- Fixed coordinated stopping of cluster nodes
+- Resolves: rhbz#1353738
+
 * Tue Mar 22 2016 Ivan Devat <idevat@redhat.com> - 0.9.148-7
 - Fixed handling permission config file corner cases
 - Resolves: rhbz#1317812
