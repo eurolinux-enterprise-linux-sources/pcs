@@ -1,0 +1,26 @@
+From 5bf0361c6452d2e2171d94363a5a6084268b7335 Mon Sep 17 00:00:00 2001
+From: Tomas Jelinek <tojeline@redhat.com>
+Date: Mon, 17 Jun 2019 13:49:30 +0200
+Subject: [PATCH] fix crashes in 'pcs cluster auth'
+
+---
+ pcsd/cfgsync.rb | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/pcsd/cfgsync.rb b/pcsd/cfgsync.rb
+index 44e6d853..58857ed5 100644
+--- a/pcsd/cfgsync.rb
++++ b/pcsd/cfgsync.rb
+@@ -852,7 +852,8 @@ module Cfgsync
+     fetcher = ConfigFetcher.new(
+       PCSAuth.getSuperuserAuth(), [config_new.class], nodes, cluster_name
+     )
+-    fetched_tokens, _ = fetcher.fetch_all()[config_new.class.name]
++    fetched_configs, _node_connected = fetcher.fetch_all()
++    fetched_tokens = fetched_configs[config_new.class.name]
+     config_new = Cfgsync::merge_tokens_files(
+       config, fetched_tokens, new_tokens, new_ports
+     )
+-- 
+2.21.0
+

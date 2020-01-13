@@ -1,0 +1,955 @@
+From 833d54bec5e3ee6e49f654b4afdf053ac583062a Mon Sep 17 00:00:00 2001
+From: Ivan Devat <idevat@redhat.com>
+Date: Thu, 20 Jun 2019 11:44:46 +0200
+Subject: [PATCH] bz1734687-01-pcs-resource-bundle-reset-fails-if
+
+---
+ pcs/cli/common/console_report.py              |  15 ++
+ pcs/cli/common/test/test_console_report.py    |  14 +-
+ pcs/cli/resource/parse_args.py                |  21 ++
+ pcs/common/report_codes.py                    |   1 +
+ pcs/lib/cib/resource/bundle.py                | 197 +++++++--------
+ pcs/lib/commands/resource.py                  |  27 ++-
+ .../test/resource/test_bundle_reset.py        | 226 ++++++++++++++++--
+ pcs/lib/reports.py                            |  10 +
+ pcs/lib/xml_tools.py                          |  15 ++
+ pcs/pcs.8                                     |   2 +-
+ pcs/resource.py                               |  29 ++-
+ pcs/test/cib_resource/test_bundle.py          |   2 +-
+ pcs/usage.py                                  |   2 +-
+ 13 files changed, 409 insertions(+), 152 deletions(-)
+
+diff --git a/pcs/cli/common/console_report.py b/pcs/cli/common/console_report.py
+index 945b83f6..3b882e3c 100644
+--- a/pcs/cli/common/console_report.py
++++ b/pcs/cli/common/console_report.py
+@@ -67,6 +67,11 @@ def format_fencing_level_target(target_type, target_value):
+         return "{0}={1}".format(target_value[0], target_value[1])
+     return target_value
+ 
++def format_list(a_list):
++    return ", ".join([
++        "'{0}'".format(x) for x in sorted(a_list)
++    ])
++
+ def format_file_role(role):
+     return _file_role_translation.get(role, role)
+ 
+@@ -1458,6 +1463,16 @@ CODE_TO_MESSAGE_BUILDER_MAP = {
+     codes.SYSTEM_WILL_RESET:
+         "System will reset shortly"
+     ,
++    codes.RESOURCE_BUNDLE_UNSUPPORTED_CONTAINER_TYPE: lambda info:
++        (
++            "Bundle '{bundle_id}' uses unsupported container type, therefore "
++            "it is not possible to set its container options. Supported "
++            "container types are: {_container_types}"
++        ).format(
++            _container_types=format_list(info["supported_container_types"]),
++            **info
++        )
++    ,
+     codes.RESOURCE_IN_BUNDLE_NOT_ACCESSIBLE: lambda info:
+         (
+             "Resource '{inner_resource_id}' will not be accessible by the "
+diff --git a/pcs/cli/common/test/test_console_report.py b/pcs/cli/common/test/test_console_report.py
+index ba7b4dbe..83d2b667 100644
+--- a/pcs/cli/common/test/test_console_report.py
++++ b/pcs/cli/common/test/test_console_report.py
+@@ -2133,7 +2133,6 @@ class SbdWatchdogNotSupported(NameBuildTest):
+             }
+         )
+ 
+-
+ class SbdWatchdogTestError(NameBuildTest):
+     code = codes.SBD_WATCHDOG_TEST_ERROR
+     def test_success(self):
+@@ -2144,6 +2143,19 @@ class SbdWatchdogTestError(NameBuildTest):
+             }
+         )
+ 
++class ResourceBundleUnsupportedContainerType(NameBuildTest):
++    code = codes.RESOURCE_BUNDLE_UNSUPPORTED_CONTAINER_TYPE
++    def test_success(self):
++        self.assert_message_from_report(
++            (
++                "Bundle 'bundle id' uses unsupported container type, therefore "
++                "it is not possible to set its container options. Supported "
++                "container types are: 'a', 'b', 'c'"
++            ),
++            reports.resource_bundle_unsupported_container_type(
++                "bundle id", ["b", "a", "c"]
++            ),
++        )
+ 
+ class ResourceInBundleNotAccessible(NameBuildTest):
+     code = codes.RESOURCE_IN_BUNDLE_NOT_ACCESSIBLE
+diff --git a/pcs/cli/resource/parse_args.py b/pcs/cli/resource/parse_args.py
+index 122a8f43..ea3db9ca 100644
+--- a/pcs/cli/resource/parse_args.py
++++ b/pcs/cli/resource/parse_args.py
+@@ -102,6 +102,27 @@ def parse_bundle_create_options(arg_list):
+     }
+     return parts
+ 
++def parse_bundle_reset_options(arg_list):
++    """
++    Commandline options: no options
++    """
++    groups = _parse_bundle_groups(arg_list)
++    container_options = groups.get("container", [])
++    parts = {
++        "container": prepare_options(container_options),
++        "network": prepare_options(groups.get("network", [])),
++        "port_map": [
++            prepare_options(port_map)
++            for port_map in groups.get("port-map", [])
++        ],
++        "storage_map": [
++            prepare_options(storage_map)
++            for storage_map in groups.get("storage-map", [])
++        ],
++        "meta": prepare_options(groups.get("meta", []))
++    }
++    return parts
++
+ def _split_bundle_map_update_op_and_options(
+     map_arg_list, result_parts, map_name
+ ):
+diff --git a/pcs/common/report_codes.py b/pcs/common/report_codes.py
+index f304d531..42825846 100644
+--- a/pcs/common/report_codes.py
++++ b/pcs/common/report_codes.py
+@@ -190,6 +190,7 @@ QDEVICE_USED_BY_CLUSTERS = "QDEVICE_USED_BY_CLUSTERS"
+ REQUIRED_OPTION_IS_MISSING = "REQUIRED_OPTION_IS_MISSING"
+ REQUIRED_OPTION_OF_ALTERNATIVES_IS_MISSING = "REQUIRED_OPTION_OF_ALTERNATIVES_IS_MISSING"
+ RESOURCE_BUNDLE_ALREADY_CONTAINS_A_RESOURCE = "RESOURCE_BUNDLE_ALREADY_CONTAINS_A_RESOURCE"
++RESOURCE_BUNDLE_UNSUPPORTED_CONTAINER_TYPE = "RESOURCE_BUNDLE_UNSUPPORTED_CONTAINER_TYPE"
+ RESOURCE_IN_BUNDLE_NOT_ACCESSIBLE = "RESOURCE_IN_BUNDLE_NOT_ACCESSIBLE"
+ RESOURCE_CLEANUP_ERROR = "RESOURCE_CLEANUP_ERROR"
+ RESOURCE_DOES_NOT_RUN = "RESOURCE_DOES_NOT_RUN"
+diff --git a/pcs/lib/cib/resource/bundle.py b/pcs/lib/cib/resource/bundle.py
+index 349ca72c..31a359c0 100644
+--- a/pcs/lib/cib/resource/bundle.py
++++ b/pcs/lib/cib/resource/bundle.py
+@@ -20,6 +20,7 @@ from pcs.lib.pacemaker.values import sanitize_id
+ from pcs.lib.xml_tools import (
+     get_sub_element,
+     update_attributes_remove_empty,
++    reset_element,
+ )
+ 
+ TAG = "bundle"
+@@ -84,15 +85,13 @@ def validate_new(
+             ]
+         )
+         +
+-        validate_reset(
+-            id_provider,
+-            container_type,
+-            container_options,
+-            network_options,
+-            port_map,
+-            storage_map,
+-            force_options
+-        )
++        _validate_container(container_type, container_options, force_options)
++        +
++        _validate_network_options_new(network_options, force_options)
++        +
++        _validate_port_map_list(port_map, id_provider, force_options)
++        +
++        _validate_storage_map_list(storage_map, id_provider, force_options)
+     )
+ 
+ def append_new(
+@@ -129,14 +128,14 @@ def append_new(
+     return bundle_element
+ 
+ def validate_reset(
+-    id_provider, container_type, container_options, network_options,
+-    port_map, storage_map, force_options=False
++    id_provider, bundle_el, container_options, network_options, port_map,
++    storage_map, force_options=False
+ ):
+     """
+     Validate bundle parameters, return list of report items
+ 
+     IdProvider id_provider -- elements' ids generator and uniqueness checker
+-    string container_type -- bundle container type
++    etree bundle_el -- the bundle to be reset
+     dict container_options -- container options
+     dict network_options -- network options
+     list of dict port_map -- list of port mapping options
+@@ -144,7 +143,7 @@ def validate_reset(
+     bool force_options -- return warnings instead of forceable errors
+     """
+     return (
+-        _validate_container(container_type, container_options, force_options)
++        _validate_container_reset(bundle_el, container_options, force_options)
+         +
+         _validate_network_options_new(network_options, force_options)
+         +
+@@ -153,71 +152,40 @@ def validate_reset(
+         _validate_storage_map_list(storage_map, id_provider, force_options)
+     )
+ 
+-def reset(
+-    bundle_element, id_provider, bundle_id, container_type, container_options,
+-    network_options, port_map, storage_map, meta_attributes
+-):
++def validate_reset_to_minimal(bundle_element):
+     """
+-    Remove configuration of bundle_element and create new one.
++    Validate removing configuration of bundle_element and keep the minimal one.
+ 
+     etree bundle_element -- the bundle element that will be reset
+-    IdProvider id_provider -- elements' ids generator
+-    string bundle_id -- id of the bundle
+-    string container_type -- bundle container type
+-    dict container_options -- container options
+-    dict network_options -- network options
+-    list of dict port_map -- list of port mapping options
+-    list of dict storage_map -- list of storage mapping options
+-    dict meta_attributes -- meta attributes
+     """
+-    # pylint: disable=too-many-arguments
++    if not _is_supported_container(_get_container_element(bundle_element)):
++        return [_get_report_unsupported_container(bundle_element)]
++    return []
+ 
+-    # Old bundle configuration is removed and re-created. We aren't trying
+-    # to keep ids:
+-    # * It doesn't make sense to reference these ids.
+-    # * Newly created ids are based on (are prefixed by) the bundle element id,
+-    #   which does not change. Therefore, it is VERY HIGHLY probable the newly
+-    #   created ids will be the same as the original ones.
+-    elements_without_reset_impact = []
++def reset_to_minimal(bundle_element):
++    """
++    Remove configuration of bundle_element and keep the minimal one.
+ 
++    etree bundle_element -- the bundle element that will be reset
++    """
+     # Elements network, storage and meta_attributes must be kept even if they
+     # are without children.
+     # See https://bugzilla.redhat.com/show_bug.cgi?id=1642514
+-    #
+-    # The only scenario that makes sense is that these elements are empty
+-    # and no attributes or children are requested for them. So we collect only
+-    # deleted tags and we will ensure creation minimal relevant elements at
+-    # least.
+-    indelible_tags = []
+-    for child in list(bundle_element):
+-        if child.tag in ["network", "storage", META_ATTRIBUTES_TAG]:
+-            indelible_tags.append(child.tag)
+-        elif child.tag != "docker":
+-            # Only primitive should be found here, currently.
+-            # The order of various element tags has no practical impact so we
+-            # don't care about it here.
+-            elements_without_reset_impact.append(child)
+-        bundle_element.remove(child)
++    # Element of container type is required.
+ 
+-    _append_container(bundle_element, container_type, container_options)
+-    if network_options or port_map or "network" in indelible_tags:
+-        _append_network(
+-            bundle_element,
+-            id_provider,
+-            bundle_id,
+-            network_options,
+-            port_map,
+-        )
+-    if storage_map or "storage" in indelible_tags:
+-        _append_storage(bundle_element, id_provider, bundle_id, storage_map)
+-    if meta_attributes or META_ATTRIBUTES_TAG in indelible_tags:
+-        append_new_meta_attributes(
+-            bundle_element,
+-            meta_attributes,
+-            id_provider,
+-        )
+-    for element in elements_without_reset_impact:
+-        bundle_element.append(element)
++    # There can be other elements beside bundle configuration (e.g. primitive).
++    # These elements stay untouched.
++    # Like any function that manipulates with cib, this also assumes prior
++    # validation that container is supported.
++    for child in list(bundle_element):
++        if child.tag in ["network", "storage"]:
++            reset_element(child)
++        if child.tag == META_ATTRIBUTES_TAG:
++            reset_element(child, keep_attrs=["id"])
++        if child.tag == "docker":
++            # docker elements requires the "image" attribute to
++            # be set.
++            reset_element(child, keep_attrs=["image"])
+ 
+ def validate_update(
+     id_provider, bundle_el, container_options, network_options,
+@@ -237,55 +205,26 @@ def validate_update(
+     list of string storage_map_remove -- list of storage mapping ids to remove
+     bool force_options -- return warnings instead of forceable errors
+     """
+-    report_list = []
+-
+-    container_el = _get_container_element(bundle_el)
+-    if container_el is not None and container_el.tag == "docker":
+-        # TODO call the proper function once more container types are
+-        # supported by pacemaker
+-        report_list.extend(
+-            _validate_container_docker_options_update(
+-                container_el,
+-                container_options,
+-                force_options
+-            )
+-        )
+-
+-    network_el = bundle_el.find("network")
+-    if network_el is None:
+-        report_list.extend(
+-            _validate_network_options_new(network_options, force_options)
+-        )
+-    else:
+-        report_list.extend(
+-            _validate_network_options_update(
+-                bundle_el,
+-                network_el,
+-                network_options,
+-                force_options
+-            )
+-        )
+-
+     # TODO It will probably be needed to split the following validators to
+     # create and update variants. It should be done once the need exists and
+     # not sooner.
+-    report_list.extend(
++    return (
++        _validate_container_update(bundle_el, container_options, force_options)
++        +
++        _validate_network_update(bundle_el, network_options, force_options)
++        +
+         _validate_port_map_list(port_map_add, id_provider, force_options)
+-    )
+-    report_list.extend(
++        +
+         _validate_storage_map_list(storage_map_add, id_provider, force_options)
+-    )
+-    report_list.extend(
++        +
+         _validate_map_ids_exist(
+             bundle_el, "port-mapping", "port-map", port_map_remove
+         )
+-    )
+-    report_list.extend(
++        +
+         _validate_map_ids_exist(
+             bundle_el, "storage-mapping", "storage-map", storage_map_remove
+         )
+     )
+-    return report_list
+ 
+ def update(
+     id_provider, bundle_el, container_options, network_options,
+@@ -402,6 +341,19 @@ def get_inner_resource(bundle_el):
+         return resources[0]
+     return None
+ 
++def _is_supported_container(container_el):
++    return (
++        container_el is not None
++        and
++        container_el.tag == "docker"
++    )
++
++def _get_report_unsupported_container(bundle_el):
++    return reports.resource_bundle_unsupported_container_type(
++        bundle_el.get("id"),
++        ["docker"],
++    )
++
+ def _validate_container(container_type, container_options, force_options=False):
+     if container_type != "docker":
+         return [
+@@ -411,7 +363,10 @@ def _validate_container(container_type, container_options, force_options=False):
+                 ["docker"],
+             )
+         ]
++    return _validate_container_options(container_options, force_options)
++
+ 
++def _validate_container_options(container_options, force_options=False):
+     validators = [
+         validate.is_required("image", "container"),
+         validate.value_not_empty("image", "image name"),
+@@ -434,6 +389,30 @@ def _validate_container(container_type, container_options, force_options=False):
+         )
+     )
+ 
++def _validate_container_reset(bundle_el, container_options, force_options):
++    # Unlike in the case of update, in reset empty options are not necessary
++    # valid - user MUST set everything (including required options e.g. image).
++    if (
++        container_options
++        and
++        not _is_supported_container(_get_container_element(bundle_el))
++    ):
++        return [_get_report_unsupported_container(bundle_el)]
++    return _validate_container_options(container_options, force_options)
++
++def _validate_container_update(bundle_el, options, force_options):
++    # Validate container options only if they are being updated. Empty options
++    # are valid - user DOESN'T NEED to change anything.
++    if not options:
++        return []
++
++    container_el = _get_container_element(bundle_el)
++    if not _is_supported_container(container_el):
++        return [_get_report_unsupported_container(bundle_el)]
++    return _validate_container_docker_options_update(
++        container_el, options, force_options
++    )
++
+ def _validate_container_docker_options_update(
+     docker_el, options, force_options
+ ):
+@@ -502,6 +481,14 @@ def _is_pcmk_remote_acccessible_after_update(network_el, options):
+ 
+     return not (case1 or case2 or case3)
+ 
++def _validate_network_update(bundle_el, options, force_options):
++    network_el = bundle_el.find("network")
++    if network_el is None:
++        return _validate_network_options_new(options, force_options)
++    return _validate_network_options_update(
++        bundle_el, network_el, options, force_options
++    )
++
+ def _validate_network_options_update(
+     bundle_el, network_el, options, force_options
+ ):
+diff --git a/pcs/lib/commands/resource.py b/pcs/lib/commands/resource.py
+index de5cfb4e..f34fef4b 100644
+--- a/pcs/lib/commands/resource.py
++++ b/pcs/lib/commands/resource.py
+@@ -580,7 +580,7 @@ def bundle_create(
+             resource.common.disable(bundle_element)
+ 
+ def bundle_reset(
+-    env, bundle_id, container_type, container_options=None,
++    env, bundle_id, container_options=None,
+     network_options=None, port_map=None, storage_map=None, meta_attributes=None,
+     force_options=False,
+     ensure_disabled=False,
+@@ -592,7 +592,6 @@ def bundle_reset(
+ 
+     LibraryEnvironment env -- provides communication with externals
+     string bundle_id -- id of the bundle to reset
+-    string container_type -- container engine name (docker, lxc...)
+     dict container_options -- container options
+     dict network_options -- network options
+     list of dict port_map -- a list of port mapping options
+@@ -619,11 +618,17 @@ def bundle_reset(
+         ),
+         required_cib_version=Version(2, 8, 0),
+     ) as resources_section:
++        bundle_element = _find_bundle(resources_section, bundle_id)
++        env.report_processor.process_list(
++            resource.bundle.validate_reset_to_minimal(bundle_element)
++        )
++        resource.bundle.reset_to_minimal(bundle_element)
++
+         id_provider = IdProvider(resources_section)
+         env.report_processor.process_list(
+             resource.bundle.validate_reset(
+                 id_provider,
+-                container_type,
++                bundle_element,
+                 container_options,
+                 network_options,
+                 port_map,
+@@ -633,23 +638,21 @@ def bundle_reset(
+             )
+         )
+ 
+-        bundle_element = _find_bundle(resources_section, bundle_id)
+-        resource.bundle.reset(
+-            bundle_element,
++        resource.bundle.update(
+             id_provider,
+-            bundle_id,
+-            container_type,
++            bundle_element,
+             container_options,
+             network_options,
+-            port_map,
+-            storage_map,
+-            meta_attributes,
++            port_map_add=port_map,
++            port_map_remove=[],
++            storage_map_add=storage_map,
++            storage_map_remove=[],
++            meta_attributes=meta_attributes,
+         )
+ 
+         if ensure_disabled:
+             resource.common.disable(bundle_element)
+ 
+-
+ def bundle_update(
+     env, bundle_id, container_options=None, network_options=None,
+     port_map_add=None, port_map_remove=None, storage_map_add=None,
+diff --git a/pcs/lib/commands/test/resource/test_bundle_reset.py b/pcs/lib/commands/test/resource/test_bundle_reset.py
+index 8fbeae78..bdea4b39 100644
+--- a/pcs/lib/commands/test/resource/test_bundle_reset.py
++++ b/pcs/lib/commands/test/resource/test_bundle_reset.py
+@@ -15,6 +15,7 @@ from pcs.lib.commands.test.resource.bundle_common import(
+     WaitMixin,
+ )
+ from pcs.lib.errors import  ReportItemSeverity as severities
++from pcs.test.tools import fixture
+ 
+ class BaseMixin(FixturesMixin):
+     bundle_id = "B1"
+@@ -24,16 +25,13 @@ class BaseMixin(FixturesMixin):
+     def initial_resources(self):
+         return self.fixture_resources_bundle_simple
+ 
+-    def bundle_reset(
+-        self, bundle_id=None, container_type=None, **params
+-    ):
++    def bundle_reset(self, bundle_id=None, **params):
+         if "container_options" not in params:
+             params["container_options"] = {"image": self.image}
+ 
+         bundle_reset(
+             self.env_assist.get_env(),
+             bundle_id=bundle_id or self.bundle_id,
+-            container_type=container_type or self.container_type,
+             **params
+         )
+ 
+@@ -44,6 +42,8 @@ class Minimal(BaseMixin, SetUpMixin, TestCase):
+     container_type = "docker"
+ 
+     def test_success_zero_change(self):
++        # Resets a bundle with only an image set to a bundle with the same
++        # image set and no other options.
+         self.config.env.push_cib(resources=self.initial_resources)
+         self.bundle_reset()
+ 
+@@ -87,6 +87,18 @@ class Minimal(BaseMixin, SetUpMixin, TestCase):
+             expected_in_processor=False,
+         )
+ 
++    def test_no_options_set(self):
++        self.env_assist.assert_raise_library_error(
++            lambda: bundle_reset(self.env_assist.get_env(), self.bundle_id),
++            [
++                fixture.error(
++                    report_codes.REQUIRED_OPTION_IS_MISSING,
++                    option_names=["image"],
++                    option_type="container",
++                ),
++            ]
++        )
++
+ class Full(BaseMixin, SetUpMixin, TestCase):
+     container_type = "docker"
+     fixture_primitive = """
+@@ -98,24 +110,11 @@ class Full(BaseMixin, SetUpMixin, TestCase):
+         return """
+             <resources>
+                 <bundle id="{bundle_id}">
+-                    <meta_attributes id="{bundle_id}-meta_attributes">
+-                        <nvpair id="{bundle_id}-meta_attributes-target-role"
+-                            name="target-role"
+-                            value="Stopped"
+-                        />
+-                    </meta_attributes>
+                     <{container_type}
+                         image="{image}"
+-                        replicas="0"
+-                        replicas-per-host="0"
++                        replicas="1"
++                        replicas-per-host="1"
+                     />
+-                    <meta_attributes id="{bundle_id}-meta_attributes">
+-                        <nvpair
+-                            id="{bundle_id}-meta_attributes-is-managed"
+-                            name="is-managed"
+-                            value="false"
+-                        />
+-                    </meta_attributes>
+                     <network
+                         control-port="12345"
+                         host-interface="eth0"
+@@ -140,6 +139,13 @@ class Full(BaseMixin, SetUpMixin, TestCase):
+                             target-dir="/tmp/{container_type}2b"
+                         />
+                     </storage>
++                    <meta_attributes id="{bundle_id}-meta_attributes">
++                        <nvpair
++                            id="{bundle_id}-meta_attributes-target-role"
++                            name="target-role"
++                            value="Stopped"
++                        />
++                    </meta_attributes>
+                     {fixture_primitive}
+                 </bundle>
+             </resources>
+@@ -211,8 +217,8 @@ class Full(BaseMixin, SetUpMixin, TestCase):
+                             <storage-mapping
+                                 id="{bundle_id}-storage-map"
+                                 options="extra options 2"
+-                                source-dir="/tmp/{container_type}2a"
+-                                target-dir="/tmp/{container_type}2b"
++                                source-dir="/tmp/{container_type}2aa"
++                                target-dir="/tmp/{container_type}2bb"
+                             />
+                         </storage>
+                         <meta_attributes id="{bundle_id}-meta_attributes">
+@@ -251,14 +257,93 @@ class Full(BaseMixin, SetUpMixin, TestCase):
+             storage_map=[
+                 {
+                     "options": "extra options 2",
+-                    "source-dir": "/tmp/{0}2a".format(self.container_type),
+-                    "target-dir": "/tmp/{0}2b".format(self.container_type),
++                    "source-dir": "/tmp/{0}2aa".format(self.container_type),
++                    "target-dir": "/tmp/{0}2bb".format(self.container_type),
+                 },
+             ],
+             meta_attributes={
+                 "target-role": "Started",
+             }
+         )
++
++    def test_success_keep_map_ids(self):
++        self.config.env.push_cib(replace={
++            ".//resources/bundle/network":
++                """
++                    <network
++                        control-port="12345"
++                        host-interface="eth0"
++                        host-netmask="24"
++                        ip-range-start="192.168.100.200"
++                    >
++                        <port-mapping
++                            id="{bundle_id}-port-map-1001"
++                            internal-port="3002"
++                            port="3000"
++                        />
++                        <port-mapping
++                            id="{bundle_id}-port-map-3000-3300"
++                            range="4000-4400"
++                        />
++                    </network>
++                """.format(bundle_id=self.bundle_id, )
++            ,
++            ".//resources/bundle/storage":
++                """
++                    <storage>
++                        <storage-mapping
++                            id="{bundle_id}-storage-map"
++                            options="extra options 2"
++                            source-dir="/tmp/docker/2aa"
++                            target-dir="/tmp/docker/2bb"
++                        />
++                    </storage>
++                """.format(bundle_id=self.bundle_id)
++            ,
++        })
++
++        # Every value is kept as before except port_map and storage_map.
++        self.bundle_reset(
++            container_options={
++                "image": self.image,
++                "replicas": "1",
++                "replicas-per-host": "1",
++            },
++            network_options={
++                "control-port": "12345",
++                "host-interface": "eth0",
++                "host-netmask": "24",
++                "ip-range-start": "192.168.100.200",
++            },
++            port_map=[
++                {
++                    "id": "{bundle_id}-port-map-1001"
++                        .format(bundle_id=self.bundle_id)
++                    ,
++                    "internal-port": "3002",
++                    "port": "3000",
++                },
++                {
++                    "id": "{bundle_id}-port-map-3000-3300"
++                        .format(bundle_id=self.bundle_id)
++                    ,
++                    "range": "4000-4400",
++                },
++            ],
++            storage_map=[
++                {
++                    "id": "{bundle_id}-storage-map"
++                        .format(bundle_id=self.bundle_id)
++                    ,
++                    "options": "extra options 2",
++                    "source-dir": "/tmp/docker/2aa",
++                    "target-dir": "/tmp/docker/2bb",
++                },
++            ],
++            meta_attributes={
++                "target-role": "Stopped",
++            }
++        )
+ class Parametrized(
+     BaseMixin, ParametrizedContainerMixin, UpgradeMixin, TestCase
+ ):
+@@ -275,9 +360,104 @@ class ResetWithStorageMap(BaseMixin, StorageMapMixin, TestCase):
+ 
+ class ResetWithMetaMap(BaseMixin, MetaMixin, TestCase):
+     container_type = "docker"
++    def test_success(self):
++        # When there is no meta attributes the new one are put on the first
++        # possition (since reset now uses update internally). This is the reason
++        # for overriding of this MetaMixin test.
++        self.config.env.push_cib(
++            resources="""
++                <resources>
++                    <bundle id="{bundle_id}">
++                        <meta_attributes id="{bundle_id}-meta_attributes">
++                            <nvpair id="{bundle_id}-meta_attributes-is-managed"
++                                name="is-managed" value="false" />
++                            <nvpair id="{bundle_id}-meta_attributes-target-role"
++                                name="target-role" value="Stopped" />
++                        </meta_attributes>
++                        <{container_type} image="{image}" />
++                    </bundle>
++                </resources>
++            """
++            .format(
++                container_type=self.container_type,
++                bundle_id=self.bundle_id,
++                image=self.image,
++            )
++        )
++        self.run_bundle_cmd(
++            meta_attributes={
++                "target-role": "Stopped",
++                "is-managed": "false",
++            }
++        )
+ 
+ class ResetWithAllOptions(BaseMixin, AllOptionsMixin, TestCase):
+     container_type = "docker"
+ 
+ class ResetWithWait(BaseMixin, WaitMixin, TestCase):
+     container_type = "docker"
++
++class ResetUnknownContainerType(BaseMixin, SetUpMixin, TestCase):
++    container_type = "unknown"
++    def test_error_or_unknown_container(self):
++        self.env_assist.assert_raise_library_error(
++            lambda: bundle_reset(self.env_assist.get_env(), self.bundle_id),
++            [
++                fixture.error(
++                    report_codes.RESOURCE_BUNDLE_UNSUPPORTED_CONTAINER_TYPE,
++                    bundle_id="B1",
++                    supported_container_types=["docker"],
++                ),
++            ]
++        )
++
++class NoMetaIdRegenerationDocker(BaseMixin, SetUpMixin, TestCase):
++    container_type = "docker"
++    @property
++    def initial_resources(self):
++        return """
++            <resources>
++                <bundle id="{bundle_id}">
++                    <docker
++                        image="{image}"
++                        replicas="1"
++                        replicas-per-host="1"
++                    />
++                    <meta_attributes id="CUSTOM_ID">
++                        <nvpair
++                            id="ANOTHER_ID-target-role"
++                            name="target-role"
++                            value="Stopped"
++                        />
++                    </meta_attributes>
++                </bundle>
++            </resources>
++        """.format(
++            container_type=self.container_type,
++            bundle_id=self.bundle_id,
++            image=self.image,
++        )
++    def test_dont_regenerate_meta_attributes_id(self):
++        self.config.env.push_cib(replace={
++            ".//resources/bundle/meta_attributes":
++                """
++                    <meta_attributes id="CUSTOM_ID">
++                        <nvpair
++                            id="CUSTOM_ID-target-role"
++                            name="target-role"
++                            value="Stopped"
++                        />
++                    </meta_attributes>
++                """
++            ,
++        })
++        self.bundle_reset(
++            container_options={
++                "image": self.image,
++                "replicas": "1",
++                "replicas-per-host": "1",
++            },
++            meta_attributes={
++                "target-role": "Stopped",
++            }
++        )
+diff --git a/pcs/lib/reports.py b/pcs/lib/reports.py
+index 92764551..045e8eca 100644
+--- a/pcs/lib/reports.py
++++ b/pcs/lib/reports.py
+@@ -2947,6 +2947,16 @@ def system_will_reset():
+         report_codes.SYSTEM_WILL_RESET,
+     )
+ 
++def resource_bundle_unsupported_container_type(
++    bundle_id, supported_container_types
++):
++    return ReportItem.error(
++        report_codes.RESOURCE_BUNDLE_UNSUPPORTED_CONTAINER_TYPE,
++        info=dict(
++            bundle_id=bundle_id,
++            supported_container_types=sorted(supported_container_types),
++        ),
++    )
+ 
+ def resource_in_bundle_not_accessible(
+     bundle_id, inner_resource_id,
+diff --git a/pcs/lib/xml_tools.py b/pcs/lib/xml_tools.py
+index acd30a71..8d59377c 100644
+--- a/pcs/lib/xml_tools.py
++++ b/pcs/lib/xml_tools.py
+@@ -129,3 +129,18 @@ def remove_when_pointless(element, attribs_important=True):
+ 
+     if not is_element_useful:
+         element.getparent().remove(element)
++
++def reset_element(element, keep_attrs=None):
++    """
++    Remove all subelements and all attributes (except mentioned in keep_attrs)
++    of given element.
++
++    lxml.etree.element element -- element to reset
++    list keep_attrs -- names of attributes thas should be kept
++    """
++    keep_attrs = keep_attrs or []
++    for child in list(element):
++        element.remove(child)
++    for key in element.attrib.keys():
++        if key not in keep_attrs:
++            del element.attrib[key]
+diff --git a/pcs/pcs.8 b/pcs/pcs.8
+index 0ec4359a..5ecb7dab 100644
+--- a/pcs/pcs.8
++++ b/pcs/pcs.8
+@@ -168,7 +168,7 @@ Configure a resource or group as a multi\-state (master/slave) resource.  If \fB
+ bundle create <bundle id> container <container type> [<container options>] [network <network options>] [port\-map <port options>]... [storage\-map <storage options>]... [meta <meta options>] [\fB\-\-disabled\fR] [\fB\-\-wait\fR[=n]]
+ Create a new bundle encapsulating no resources. The bundle can be used either as it is or a resource may be put into it at any time. If \fB\-\-disabled\fR is specified, the bundle is not started automatically. If \fB\-\-wait\fR is specified, pcs will wait up to 'n' seconds for the bundle to start and then return 0 on success or 1 on error. If 'n' is not specified it defaults to 60 minutes.
+ .TP
+-bundle reset <bundle id> container <container type> [<container options>] [network <network options>] [port\-map <port options>]... [storage\-map <storage options>]... [meta <meta options>] [\fB\-\-disabled\fR] [\fB\-\-wait\fR[=n]]
++bundle reset <bundle id> [container <container options>] [network <network options>] [port\-map <port options>]... [storage\-map <storage options>]... [meta <meta options>] [\fB\-\-disabled\fR] [\fB\-\-wait\fR[=n]]
+ Configure specified bundle with given options. Unlike bundle update, this command resets the bundle according given options - no previous options are kept. Resources inside the bundle are kept as they are. If \fB\-\-disabled\fR is specified, the bundle is not started automatically. If \fB\-\-wait\fR is specified, pcs will wait up to 'n' seconds for the bundle to start and then return 0 on success or 1 on error. If 'n' is not specified it defaults to 60 minutes.
+ .TP
+ bundle update <bundle id> [container <container options>] [network <network options>] [port\-map (add <port options>) | (remove <id>...)]... [storage\-map (add <storage options>) | (remove <id>...)]... [meta <meta options>] [\fB\-\-wait\fR[=n]]
+diff --git a/pcs/resource.py b/pcs/resource.py
+index f615f682..dea30f49 100644
+--- a/pcs/resource.py
++++ b/pcs/resource.py
+@@ -24,6 +24,7 @@ from pcs.cli.common.errors import CmdLineInputError
+ from pcs.cli.common.parse_args import prepare_options
+ from pcs.cli.resource.parse_args import (
+     parse_bundle_create_options,
++    parse_bundle_reset_options,
+     parse_bundle_update_options,
+     parse_create as parse_create_args,
+ )
+@@ -2896,7 +2897,23 @@ def resource_bundle_create_cmd(lib, argv, modifiers):
+       * --wait
+       * -f - CIB file
+     """
+-    _resource_bundle_configure(lib.resource.bundle_create, argv, modifiers)
++    if not argv:
++        raise CmdLineInputError()
++
++    bundle_id = argv[0]
++    parts = parse_bundle_create_options(argv[1:])
++    lib.resource.bundle_create(
++        bundle_id,
++        parts["container_type"],
++        container_options=parts["container"],
++        network_options=parts["network"],
++        port_map=parts["port_map"],
++        storage_map=parts["storage_map"],
++        meta_attributes=parts["meta"],
++        force_options=modifiers["force"],
++        ensure_disabled=modifiers["disabled"],
++        wait=modifiers["wait"]
++    )
+ 
+ def resource_bundle_reset_cmd(lib, argv, modifiers):
+     """
+@@ -2906,17 +2923,13 @@ def resource_bundle_reset_cmd(lib, argv, modifiers):
+       * --wait
+       * -f - CIB file
+     """
+-    _resource_bundle_configure(lib.resource.bundle_reset, argv, modifiers)
+-
+-def _resource_bundle_configure(call_lib, argv, modifiers):
+-    if len(argv) < 1:
++    if not argv:
+         raise CmdLineInputError()
+ 
+     bundle_id = argv[0]
+-    parts = parse_bundle_create_options(argv[1:])
+-    call_lib(
++    parts = parse_bundle_reset_options(argv[1:])
++    lib.resource.bundle_reset(
+         bundle_id,
+-        parts["container_type"],
+         container_options=parts["container"],
+         network_options=parts["network"],
+         port_map=parts["port_map"],
+diff --git a/pcs/test/cib_resource/test_bundle.py b/pcs/test/cib_resource/test_bundle.py
+index 708de645..d5ce702a 100644
+--- a/pcs/test/cib_resource/test_bundle.py
++++ b/pcs/test/cib_resource/test_bundle.py
+@@ -64,7 +64,7 @@ class BundleReset(BundleCreateCommon):
+             "resource bundle create B2 container docker image=pcs:test"
+         )
+         self.assert_effect(
+-            "resource bundle reset B1 container docker image=pcs:new",
++            "resource bundle reset B1 container image=pcs:new",
+             """
+                 <resources>
+                     <bundle id="B1">
+diff --git a/pcs/usage.py b/pcs/usage.py
+index 80ba9168..4cdfc3ac 100644
+--- a/pcs/usage.py
++++ b/pcs/usage.py
+@@ -450,7 +450,7 @@ Commands:
+         to start and then return 0 on success or 1 on error. If 'n' is not
+         specified it defaults to 60 minutes.
+ 
+-    bundle reset <bundle id> container <container type> [<container options>]
++    bundle reset <bundle id> [container <container options>]
+             [network <network options>] [port-map <port options>]...
+             [storage-map <storage options>]... [meta <meta options>]
+             [--disabled] [--wait[=n]]
+-- 
+2.21.0
+

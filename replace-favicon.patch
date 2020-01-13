@@ -1,0 +1,54 @@
+From 0a07e4408586a6760528b5be31e4c850f3882dd0 Mon Sep 17 00:00:00 2001
+From: Ivan Devat <idevat@redhat.com>
+Date: Mon, 29 Apr 2019 13:38:40 +0200
+Subject: [PATCH] replace favicon
+
+---
+ pcsd/public/favicon.ico        | Bin 318 -> 0 bytes
+ pcsd/public/images/favicon.png | Bin 0 -> 134 bytes
+ pcsd/views/main.erb            |   1 +
+ 3 files changed, 1 insertion(+)
+ delete mode 100644 pcsd/public/favicon.ico
+ create mode 100644 pcsd/public/images/favicon.png
+
+diff --git a/pcsd/public/favicon.ico b/pcsd/public/favicon.ico
+deleted file mode 100644
+index cbb61249380dc73f5d98ebf47ad622f844a33bee..0000000000000000000000000000000000000000
+GIT binary patch
+literal 0
+HcmV?d00001
+
+literal 318
+zcmZQzU<5(|0RaXO&|qX>5ChRb3=&ZQVnzlQAc+bfsu>sx3tJd|{`|@C`t@sug$oxm
+z`1*!0oIih-fswHfh}Q!(-2l=_3|w5AK=vshJ_9!B|NsAB`W*<!fysC8Orf-{9f<Mp
+z!s8__@08xX3w^rwZt%sYE(|Pd@2(9rnO<IAw)U1m^^P-VPE_5>Inlj)_wJL+Pqb(5
+z*?p#SPy4K!dv<Tn+OczG#_1hdcUR8b(X;!^+`D&g@0xa|eeK=5H@8)9+jjTX-CGr>
+NXU)317VHQL2mq$QZ5jXo
+
+diff --git a/pcsd/public/images/favicon.png b/pcsd/public/images/favicon.png
+new file mode 100644
+index 0000000000000000000000000000000000000000..d335590f985d31491ad4dc713cb47907b1403e88
+GIT binary patch
+literal 134
+zcmeAS@N?(olHy`uVBq!ia0vp^0wB!93?!50ihlx9oB=)|u0R?HTvwivP}RQxWHFWm
+z`2{mLJiCzw<Y;@kIEHXUCnqFaNML9R<>66^ky7H(iQ!@5(cw`@x~e77IG<ZQnU|NB
+Zfnojwo}yRn8MPqeJYD@<);T3K0RZE%9!CHG
+
+literal 0
+HcmV?d00001
+
+diff --git a/pcsd/views/main.erb b/pcsd/views/main.erb
+index 000401c6..6476e0a4 100644
+--- a/pcsd/views/main.erb
++++ b/pcsd/views/main.erb
+@@ -1,6 +1,7 @@
+ <!DOCTYPE html>
+ <head>
+   <title>Pacemaker/Corosync Configuration</title>
++  <link rel="shortcut icon" type="image/png" href="/images/favicon.png">
+   <link rel="stylesheet" type="text/css" href="/css/style.css" />
+   <link rel="stylesheet" type="text/css" href="/css/overpass.css" />
+   <link rel="stylesheet" type="text/css" href="/css/liberation.css" />
+-- 
+2.20.1
+
